@@ -3,18 +3,18 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
 
-import { AuthScreen } from "./AuthScreen";
+import { SocialHome } from "./SocialHome";
 
 export const dynamic = "force-dynamic";
 
-export default async function EntryPage() {
+export default async function HomePage() {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
 
-  if (session) {
-    redirect("/home");
+  if (!session) {
+    redirect("/");
   }
 
-  return <AuthScreen />;
+  return <SocialHome displayName={session.user.name} />;
 }

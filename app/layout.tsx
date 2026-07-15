@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "小小朋友圈",
-  description: "一个收藏自己和朋友温柔日常的私密社交小站。",
+  title: "圆个圈 Along",
+  description: "一个只允许熟人进入、保存共同生活与回忆的私人社交平台。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

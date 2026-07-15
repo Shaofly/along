@@ -1,0 +1,1 @@
+ALTER TABLE "invitations" ADD COLUMN "encrypted_code" text NOT NULL;

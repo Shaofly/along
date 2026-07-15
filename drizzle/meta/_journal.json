@@ -1,5 +1,27 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1784063923137,
+      "tag": "0000_bouncy_the_enforcers",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784064216050,
+      "tag": "0001_jittery_pepper_potts",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784065626988,
+      "tag": "0002_flippant_invisible_woman",
+      "breakpoints": true
+    }
+  ]
 }

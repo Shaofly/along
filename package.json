@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
-    "start": "node --env-file-if-exists=.env.local .next/standalone/server.js",
+    "start": "(sleep 1 && open \"http://localhost:${PORT:-3000}\") & node --env-file-if-exists=.env.local .next/standalone/server.js",
     "test": "pnpm run lint && pnpm run typecheck && pnpm run docs:check",
     "test:smoke": "node --env-file=.env.local scripts/smoke-test.mjs",
     "lint": "eslint .",

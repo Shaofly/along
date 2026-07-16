@@ -84,6 +84,8 @@ pnpm run dev
 ./scripts/start-local.sh
 ```
 
+该脚本会启动 PostgreSQL 与固定在 `3000` 端口的 Next.js 开发服务器，并在服务器启动后自动打开 `http://localhost:3000`。
+
 手机与电脑连接同一局域网时，可以通过电脑的局域网 IP 和端口 `3000` 访问。该地址还需要加入 `.env.local` 的 `TRUSTED_ORIGINS`，更换网络导致 IP 改变后应同步更新。
 
 使用 Cloudflare Quick Tunnel 在外网临时测试时，应用会自动信任 `https://*.trycloudflare.com`，不需要在每次生成随机域名后修改 `.env.local`。`TRUSTED_ORIGINS` 仍用于配置本机、局域网地址和以后购买的正式域名，多个地址使用英文逗号分隔。例如：

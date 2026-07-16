@@ -2,7 +2,6 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Bell, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
@@ -66,12 +65,23 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const gestureStart = useRef<{ x: number; y: number } | null>(null);
-  const activeRoute = routeFromPath(pathname, user.id);
+  const navigationTimer = useRef<number | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    fromPath: string;
+    value: PrimaryRoute;
+  } | null>(null);
+  const activeRoute = pendingNavigation?.fromPath === pathname
+    ? pendingNavigation.value
+    : routeFromPath(pathname, user.id);
 
   useEffect(() => {
     const onPopState = () => setDrawerOpen(false);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => () => {
+    if (navigationTimer.current) window.clearTimeout(navigationTimer.current);
   }, []);
 
   function openDrawer() {
@@ -94,7 +104,10 @@ export function AppShell({
       window.setTimeout(() => router.push(href), 0);
       return;
     }
-    router.push(href);
+    if (value === activeRoute) return;
+    setPendingNavigation({ fromPath: pathname, value });
+    if (navigationTimer.current) window.clearTimeout(navigationTimer.current);
+    navigationTimer.current = window.setTimeout(() => router.push(href), 150);
   }
 
   function beginOpenGesture(event: PointerEvent<HTMLDivElement>) {
@@ -154,21 +167,23 @@ export function AppShell({
       >
         <header className="global-header" onClick={(event) => drawerOpen && event.stopPropagation()}>
           <div className="global-header-left">
-            <button className="header-avatar" aria-label="打开个人菜单" onClick={() => {
-              if (window.matchMedia("(max-width: 700px)").matches) openDrawer();
-              else setMenuOpen((current) => !current);
-            }} type="button">
-              <Avatar user={user} />
-            </button>
+            <div className="header-navigation-cluster">
+              <button className="header-avatar" aria-label="打开个人菜单" onClick={() => {
+                if (window.matchMedia("(max-width: 700px)").matches) openDrawer();
+                else setMenuOpen((current) => !current);
+              }} type="button">
+                <Avatar user={user} />
+              </button>
+              <SegmentedControl
+                ariaLabel="主要栏目"
+                className="primary-navigation"
+                onValueChange={navigate}
+                options={primaryOptions}
+                role="tablist"
+                value={activeRoute}
+              />
+            </div>
             <span className="mobile-header-name">{user.name}</span>
-            <SegmentedControl
-              ariaLabel="主要栏目"
-              className="primary-navigation"
-              onValueChange={navigate}
-              options={primaryOptions}
-              role="tablist"
-              value={activeRoute}
-            />
             <AnimatePresence>
               {menuOpen ? (
                 <motion.div
@@ -187,11 +202,6 @@ export function AppShell({
               ) : null}
             </AnimatePresence>
           </div>
-
-          <Link className="header-logo" href="/home" aria-label="返回圆个圈首页">
-            <Image className="header-logo-full" alt="圆个圈 Along" height={80} priority src="/branding/along-logo.png" width={200} />
-            <Image className="header-logo-mark" alt="圆个圈" height={44} priority src="/branding/along-mark.png" width={44} />
-          </Link>
 
           <Link className="notification-button" href="/notifications" aria-label="查看通知">
             <Bell size={21} strokeWidth={1.9} />

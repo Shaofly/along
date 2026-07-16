@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element -- Private media and local previews require browser-side URLs. */
 
 import Link from "next/link";
-import Image from "next/image";
+import { Hourglass, MapPinned } from "lucide-react";
 import {
   FormEvent,
   useEffect,
@@ -206,13 +206,21 @@ export function SocialHome({
         </section>
 
         <div className="home-composer" ref={composerRef}>
-          {!publisherOpen ? (
+          <div className="home-action-row">
             <button className="composer-launcher" onClick={() => setPublisherOpen(true)} type="button">
               <span>{currentUser.name.slice(0, 1)}</span>
-              <strong>写点什么……</strong>
+              <strong>{publisherOpen ? "正在写一点什么" : "写点什么……"}</strong>
               <small>留下一点今天发生的事</small>
             </button>
-          ) : null}
+            <button aria-disabled="true" className="home-feature-entry" title="将在后续版本开放" type="button">
+              <Hourglass aria-hidden="true" size={19} />
+              <span>时间胶囊</span>
+            </button>
+            <button aria-disabled="true" className="home-feature-entry" title="将在后续版本开放" type="button">
+              <MapPinned aria-hidden="true" size={19} />
+              <span>足迹地图</span>
+            </button>
+          </div>
           <AnimatedReveal show={publisherOpen}>
             <form className="real-composer" onSubmit={publish}>
             <div className="composer-context">
@@ -365,7 +373,7 @@ export function SocialHome({
 
         <section className="home-circle-section home-summary-section">
           <div className="home-section-heading">
-            <div><p className="eyebrow">圈子</p><h2>一起留下的地方</h2></div>
+            <div><h2>圈子</h2><p className="section-subtitle">一起留下的地方</p></div>
             <Link href="/circles">查看全部</Link>
           </div>
           <div className="home-circle-list">
@@ -383,7 +391,7 @@ export function SocialHome({
 
         <section className="home-friend-section home-summary-section">
           <div className="home-section-heading">
-            <div><p className="eyebrow">朋友</p><h2>熟悉的人</h2></div>
+            <div><h2>朋友</h2><p className="section-subtitle">熟悉的人</p></div>
             <Link href="/friends">查看全部</Link>
           </div>
           <div className="home-friend-list">
@@ -399,18 +407,14 @@ export function SocialHome({
         <section className="latest-section">
           <div className="section-line-heading">
             <div>
-              <p className="eyebrow">最近动态</p>
-              <h2>朋友们新留下的片段</h2>
+              <h2>最近动态</h2>
+              <p className="section-subtitle">朋友们新留下的片段</p>
             </div>
             <Link href="/feed">查看全部</Link>
           </div>
           <PostStream friends={friends} posts={posts} />
         </section>
       </div>
-
-      <footer className="mobile-home-signature">
-        <Image alt="圆个圈 Along" height={80} src="/branding/along-logo.png" width={200} />
-      </footer>
     </AppShell>
   );
 }

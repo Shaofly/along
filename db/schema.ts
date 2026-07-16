@@ -346,6 +346,9 @@ export const circleMembershipPeriods = pgTable(
     joinedAt: timestamp("joined_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     leftAt: timestamp("left_at", { withTimezone: true }),
   },
   (table) => [
@@ -361,6 +364,10 @@ export const circleMembershipPeriods = pgTable(
     check(
       "circle_membership_visibility_ordered",
       sql`${table.visibleFrom} is null or ${table.visibleFrom} <= ${table.joinedAt}`,
+    ),
+    check(
+      "circle_membership_viewed_ordered",
+      sql`${table.lastViewedAt} >= ${table.joinedAt}`,
     ),
     check(
       "circle_membership_nickname_not_blank",

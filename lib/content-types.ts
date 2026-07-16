@@ -58,6 +58,13 @@ export type CircleSummary = {
     realName: string;
     image: string | null;
   }>;
+  unread: {
+    posts: number;
+    comments: number;
+    replies: number;
+    changes: number;
+    total: number;
+  };
 };
 
 export type FriendSummary = {
@@ -69,4 +76,5 @@ export type FriendSummary = {
   displayName: string;
   remark: string | null;
   image: string | null;
+  bio: string;
 };

@@ -3,15 +3,24 @@
 /* eslint-disable @next/next/no-img-element -- Private media and local previews require browser-side URLs. */
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Hourglass, MapPinned } from "lucide-react";
+import { AlignJustify, ChevronDown, Hourglass, MapPinned } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
-import { PostStream } from "@/app/components/PostStream";
+import { DissolveTextarea } from "@/app/components/DissolveField";
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import { SoftReveal } from "@/app/components/SoftReveal";
+import { TextStateSwap } from "@/app/components/TextStateSwap";
 import type {
   CircleSummary,
   FeedPost,
@@ -48,17 +57,21 @@ type SavedMedia = HomeDraft["media"][number];
 export function SocialHome({
   currentUser,
   friends,
-  posts,
   boardMedia,
   circles,
   initialDraft,
+  circleList,
+  friendList,
+  latestContent,
 }: {
   currentUser: ShellUser;
   friends: FriendSummary[];
-  posts: FeedPost[];
   boardMedia: FeedPost["media"];
   circles: CircleSummary[];
   initialDraft: HomeDraft | null;
+  circleList: ReactNode;
+  friendList: ReactNode;
+  latestContent: ReactNode;
 }) {
   const router = useRouter();
   const reducedMotion = useReducedMotion();
@@ -75,12 +88,19 @@ export function SocialHome({
   );
   const [viewerIds, setViewerIds] = useState<string[]>(initialDraft?.viewerIds ?? []);
   const [pending, setPending] = useState(false);
+  const [draftAction, setDraftAction] = useState<"save" | "discard" | null>(null);
   const [error, setError] = useState("");
   const [publisherOpen, setPublisherOpen] = useState(false);
-  const [closingPublisher, setClosingPublisher] = useState(false);
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
   const [rejectClosePulse, setRejectClosePulse] = useState(0);
+  const [toggleContentWidths, setToggleContentWidths] = useState<{
+    collapsed: number;
+    expanded: number;
+  } | null>(null);
   const closeTimer = useRef<number | null>(null);
+  const composerSectionRef = useRef<HTMLDivElement>(null);
+  const collapsedToggleMeasureRef = useRef<HTMLSpanElement>(null);
+  const expandedToggleMeasureRef = useRef<HTMLSpanElement>(null);
   const latestSectionRef = useRef<HTMLElement>(null);
   const boardItemIds = useMemo(
     () => [0, 1, 2].map((index) => boardMedia[index]?.id ?? `empty-${index}`),
@@ -97,6 +117,7 @@ export function SocialHome({
   );
   const note = warmNotes[new Date().getDate() % warmNotes.length];
   const hasDraftContent = Boolean(body.trim() || files.length || savedMedia.length);
+  const toggleState = publisherOpen ? "expanded" : "collapsed";
 
   useEffect(
     () => () => previews.forEach((preview) => URL.revokeObjectURL(preview.url)),
@@ -122,6 +143,37 @@ export function SocialHome({
     return () => window.clearTimeout(resetTimer);
   }, [boardOrder, defaultBoardOrder]);
 
+  useLayoutEffect(() => {
+    const collapsedMeasure = collapsedToggleMeasureRef.current;
+    const expandedMeasure = expandedToggleMeasureRef.current;
+    if (!collapsedMeasure || !expandedMeasure) return;
+
+    const measure = () => {
+      setToggleContentWidths({
+        collapsed: collapsedMeasure.getBoundingClientRect().width,
+        expanded: expandedMeasure.getBoundingClientRect().width,
+      });
+    };
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(collapsedMeasure);
+    observer.observe(expandedMeasure);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!publisherOpen) return;
+    const scrollTimer = window.setTimeout(() => {
+      composerSectionRef.current?.scrollIntoView({
+        behavior: reducedMotion ? "auto" : "smooth",
+        block: "center",
+      });
+    }, reducedMotion ? 0 : 280);
+    return () => window.clearTimeout(scrollTimer);
+  }, [publisherOpen, reducedMotion]);
+
   function bringBoardItemForward(itemId: string) {
     setBoardOrder((current) => [...current.filter((currentId) => currentId !== itemId), itemId]);
   }
@@ -141,17 +193,14 @@ export function SocialHome({
 
   function openPublisher() {
     if (publisherOpen) return;
-    setClosingPublisher(false);
     setPublisherOpen(true);
   }
 
   function finishClosingPublisher() {
     setRejectClosePulse(0);
-    setClosingPublisher(true);
     if (closeTimer.current) window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => {
       setPublisherOpen(false);
-      setClosingPublisher(false);
     }, reducedMotion ? 0 : 180);
   }
 
@@ -229,6 +278,7 @@ export function SocialHome({
   }
 
   async function saveAndCloseDraft() {
+    setDraftAction("save");
     setPending(true);
     setError("");
     let uploaded: SavedMedia[] = [];
@@ -246,6 +296,7 @@ export function SocialHome({
       setDraftDialogOpen(false);
     } finally {
       setPending(false);
+      setDraftAction(null);
     }
   }
 
@@ -263,6 +314,7 @@ export function SocialHome({
   }
 
   async function discardAndCloseDraft() {
+    setDraftAction("discard");
     setPending(true);
     setError("");
     try {
@@ -279,6 +331,7 @@ export function SocialHome({
       setDraftDialogOpen(false);
     } finally {
       setPending(false);
+      setDraftAction(null);
     }
   }
 
@@ -344,43 +397,61 @@ export function SocialHome({
               <motion.button
                 aria-expanded={publisherOpen}
                 className={`primary-action composer-toggle${publisherOpen ? " is-open" : ""}`}
-                layout
                 onClick={togglePublisher}
-                transition={{ type: "spring", stiffness: 380, damping: 30, mass: 0.8 }}
                 type="button"
               >
-                <AnimatePresence initial={false} mode="wait">
-                  <motion.span
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -3 }}
-                    initial={{ opacity: 0, y: 3 }}
-                    key={publisherOpen ? "close" : "open"}
-                    transition={{ duration: reducedMotion ? 0 : 0.16 }}
-                  >
-                    {publisherOpen ? "收起" : "写一条近况"}
-                  </motion.span>
-                </AnimatePresence>
-                <AnimatePresence>
-                  {publisherOpen ? (
-                    <motion.i
-                      animate={
-                        rejectClosePulse
-                          ? { rotate: [90, 0, 104, 90] }
-                          : { rotate: closingPublisher ? 0 : 90 }
-                      }
-                      aria-hidden="true"
-                      className="composer-toggle-arrow"
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      initial={{ opacity: 0, rotate: 0, scale: 0.8 }}
-                      key="composer-toggle-arrow"
-                      transition={
-                        rejectClosePulse
-                          ? { duration: reducedMotion ? 0 : 0.48, ease: [0.22, 1, 0.36, 1] }
-                          : { duration: reducedMotion ? 0 : 0.18 }
-                      }
-                    />
-                  ) : null}
-                </AnimatePresence>
+                <motion.span
+                  animate={toggleContentWidths
+                    ? { width: toggleContentWidths[toggleState] }
+                    : undefined}
+                  className={`composer-toggle-content${toggleContentWidths ? " is-measured" : ""}`}
+                  transition={{ duration: reducedMotion ? 0 : 0.3, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <span aria-hidden="true" className="composer-toggle-measure" ref={collapsedToggleMeasureRef}>
+                    <span>写一条近况</span>
+                    <AlignJustify size={17} strokeWidth={2.2} />
+                  </span>
+                  <span aria-hidden="true" className="composer-toggle-measure" ref={expandedToggleMeasureRef}>
+                    <span>收起</span>
+                    <ChevronDown size={18} strokeWidth={2.2} />
+                  </span>
+                  <AnimatePresence initial={false} mode="wait">
+                    {toggleState === "expanded" ? (
+                      <motion.span
+                        animate={{ filter: "blur(0px)", opacity: 1, y: 0 }}
+                        className="composer-toggle-state"
+                        data-active="true"
+                        exit={{ filter: "blur(2px)", opacity: 0, y: -4 }}
+                        initial={{ filter: "blur(2px)", opacity: 0, y: 4 }}
+                        key="expanded"
+                        transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeInOut" }}
+                      >
+                        <span>收起</span>
+                        <motion.span
+                          animate={rejectClosePulse ? { rotate: [0, -84, 11, 0] } : { rotate: 0 }}
+                          className="composer-toggle-glyph"
+                          key={`composer-toggle-feedback-${rejectClosePulse}`}
+                          transition={{ duration: reducedMotion ? 0 : 0.46, ease: [0.22, 1, 0.36, 1] }}
+                        >
+                          <ChevronDown size={18} strokeWidth={2.2} />
+                        </motion.span>
+                      </motion.span>
+                    ) : (
+                      <motion.span
+                        animate={{ filter: "blur(0px)", opacity: 1, y: 0 }}
+                        className="composer-toggle-state"
+                        data-active="true"
+                        exit={{ filter: "blur(2px)", opacity: 0, y: -4 }}
+                        initial={{ filter: "blur(2px)", opacity: 0, y: 4 }}
+                        key="collapsed"
+                        transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeInOut" }}
+                      >
+                        <span>写一条近况</span>
+                        <AlignJustify className="composer-toggle-glyph" size={17} strokeWidth={2.2} />
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </motion.span>
               </motion.button>
               <button className="secondary-action" onClick={scrollToLatest} type="button">看看朋友们</button>
             </div>
@@ -418,7 +489,7 @@ export function SocialHome({
           </button>
         </aside>
 
-        <div className="home-composer">
+        <div className="home-composer" ref={composerSectionRef}>
           <AnimatedReveal show={publisherOpen}>
             <form className="real-composer" onSubmit={publish}>
               <div className="composer-context">
@@ -456,12 +527,13 @@ export function SocialHome({
                 </div>
               </AnimatedReveal>
               <label className="sr-only" htmlFor="post-body">动态正文</label>
-              <textarea
+              <DissolveTextarea
                 id="post-body"
                 maxLength={5000}
-                onChange={(event) => setBody(event.target.value)}
+                onValueChange={setBody}
                 placeholder="想说的话从这里写起吧……"
                 value={body}
+                wrapperClassName="composer-writing-surface"
               />
 
               {savedMedia.length || previews.length ? (
@@ -532,9 +604,12 @@ export function SocialHome({
                   />
                 </label>
                 <span>{savedMedia.length + files.length > 0 ? `${savedMedia.length + files.length} / 20 张` : "JPG、PNG、WebP 或 HEIC"}</span>
-                <button className="publish-button" disabled={pending || !hasDraftContent} type="submit">
-                  {pending ? "正在处理" : "发布"}
-                </button>
+                <div className="composer-submit-actions">
+                  <button className="composer-close-action" disabled={pending} onClick={requestClosePublisher} type="button">收起</button>
+                  <button className="publish-button" disabled={pending || !hasDraftContent} type="submit">
+                    <TextStateSwap labels={["发布", "正在发布"]} text={pending ? "正在发布" : "发布"} />
+                  </button>
+                </div>
               </div>
             </form>
           </AnimatedReveal>
@@ -545,17 +620,7 @@ export function SocialHome({
             <SoftReveal><h2>圈子</h2></SoftReveal>
             <Link href="/circles">查看全部</Link>
           </div>
-          <div className="home-circle-list">
-            {circles.length ? circles.slice(0, 3).map((circle, index) => (
-              <Link className={`home-circle-item circle-tone-${(index % 3) + 1}`} href={`/circles/${circle.id}`} key={circle.id}>
-                <span className="home-circle-cover">{circle.name.slice(0, 1)}</span>
-                <span><strong>{circle.name}</strong><small>{circle.description || `${circle.members.length} 位成员在这里记录`}</small></span>
-                <span className="mini-avatar-stack" aria-label={`${circle.members.length} 位成员`}>
-                  {circle.members.slice(0, 3).map((member) => <i key={member.id}>{member.name.slice(0, 1)}</i>)}
-                </span>
-              </Link>
-            )) : <p className="summary-empty">还没有小圈子。</p>}
-          </div>
+          {circleList}
         </section>
 
         <section className="home-friend-section home-summary-section">
@@ -563,14 +628,7 @@ export function SocialHome({
             <SoftReveal><h2>朋友</h2></SoftReveal>
             <Link href="/friends">查看全部</Link>
           </div>
-          <div className="home-friend-list">
-            {friends.length ? friends.slice(0, 5).map((friend) => (
-              <Link href={`/profile/${friend.id}`} key={friend.id}>
-                <span className="friend-avatar">{friend.image ? <img alt="" src={friend.image} /> : friend.displayName.slice(0, 1)}</span>
-                <span><strong>{friend.displayName}</strong>{friend.displayName !== friend.identityName ? <small>{friend.identityName}</small> : friend.nickname ? <small>{friend.realName}</small> : null}</span>
-              </Link>
-            )) : <p className="summary-empty">还没有可以显示的朋友。</p>}
-          </div>
+          {friendList}
         </section>
 
         <section className="latest-section" ref={latestSectionRef}>
@@ -578,7 +636,7 @@ export function SocialHome({
             <SoftReveal><h2>最近动态</h2></SoftReveal>
             <Link href="/feed">查看全部</Link>
           </div>
-          <PostStream friends={friends} posts={posts} />
+          {latestContent}
         </section>
 
         <section className="home-capsule-section home-summary-section home-feature-section">
@@ -616,8 +674,18 @@ export function SocialHome({
               <h2 id="draft-dialog-title">要保存这条未完成的记录吗？</h2>
               <p>保存后可以在其他设备上继续写，只有你自己能看到。</p>
               <div className="draft-dialog-actions">
-                <button autoFocus className="draft-save-action" disabled={pending} onClick={saveAndCloseDraft} type="button">保存并收起</button>
-                <button disabled={pending} onClick={discardAndCloseDraft} type="button">放弃内容</button>
+                <button autoFocus className="draft-save-action" disabled={pending} onClick={saveAndCloseDraft} type="button">
+                  <TextStateSwap
+                    labels={["保存并收起", "正在保存"]}
+                    text={draftAction === "save" ? "正在保存" : "保存并收起"}
+                  />
+                </button>
+                <button disabled={pending} onClick={discardAndCloseDraft} type="button">
+                  <TextStateSwap
+                    labels={["放弃内容", "正在放弃"]}
+                    text={draftAction === "discard" ? "正在放弃" : "放弃内容"}
+                  />
+                </button>
                 <button disabled={pending} onClick={() => setDraftDialogOpen(false)} type="button">继续编辑</button>
               </div>
             </motion.div>

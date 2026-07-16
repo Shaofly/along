@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { PostStream } from "@/app/components/PostStream";
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
+import { DissolveTextarea } from "@/app/components/DissolveField";
 import type { FeedPost, FriendSummary } from "@/lib/content-types";
 
 type Profile = {
@@ -91,7 +92,16 @@ export function ProfileView({
             <header><h2>编辑个人资料</h2><button onClick={() => setEditing(false)} type="button" aria-label="关闭">×</button></header>
             <label>真实姓名<input maxLength={40} onChange={(event) => setRealName(event.target.value)} required value={realName} /></label>
             <label>昵称 <small>选填</small><input maxLength={40} onChange={(event) => setNickname(event.target.value)} value={nickname} /></label>
-            <label>简介<textarea maxLength={160} onChange={(event) => setBio(event.target.value)} value={bio} /></label>
+            <label>
+              简介
+              <DissolveTextarea
+                maxLength={160}
+                onValueChange={setBio}
+                placeholder="写一句简单的自我介绍"
+                value={bio}
+                wrapperClassName="profile-writing-surface"
+              />
+            </label>
             <small>{bio.length} / 160</small>
             {error ? <p className="composer-error">{error}</p> : null}
             <button className="publish-button" disabled={pending} type="submit">{pending ? "正在保存" : "保存资料"}</button>

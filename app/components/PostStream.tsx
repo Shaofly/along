@@ -7,6 +7,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
+import { DissolveTextarea } from "@/app/components/DissolveField";
 import type {
   FeedPost,
   FriendSummary,
@@ -173,7 +174,14 @@ export function PostStream({
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setEditing(null)}>
           <form className="edit-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={saveEdit}>
             <header><h2>编辑动态</h2><button onClick={() => setEditing(null)} type="button" aria-label="关闭">×</button></header>
-            <textarea maxLength={5000} onChange={(event) => setEditBody(event.target.value)} value={editBody} />
+            <DissolveTextarea
+              aria-label="动态正文"
+              maxLength={5000}
+              onValueChange={setEditBody}
+              placeholder="写下这条动态……"
+              value={editBody}
+              wrapperClassName="edit-writing-surface"
+            />
             {!editing.circle ? (
               <SegmentedControl
                 ariaLabel="可见范围"

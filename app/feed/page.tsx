@@ -28,6 +28,7 @@ export default async function FeedPage() {
     displayName: friend.displayName,
     remark: friend.remark,
     image: friend.image,
+    bio: friend.bio,
   }));
 
   return (

@@ -35,6 +35,7 @@ export default async function CirclesPage() {
             displayName: friend.displayName,
             remark: friend.remark,
             image: friend.image,
+            bio: friend.bio,
           }))}
         />
       </div>

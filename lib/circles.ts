@@ -79,6 +79,8 @@ export async function getCircleDashboard(userId: string) {
       description: circles.description,
       status: circles.status,
       updatedAt: circles.updatedAt,
+      joinedAt: circleMembershipPeriods.joinedAt,
+      lastViewedAt: circleMembershipPeriods.lastViewedAt,
       leftAt: circleMembershipPeriods.leftAt,
     })
     .from(circleMembershipPeriods)
@@ -87,6 +89,34 @@ export async function getCircleDashboard(userId: string) {
     .orderBy(desc(circles.updatedAt));
 
   const circleIds = [...new Set(periodRows.map((row) => row.circleId))];
+  const activePeriods = periodRows.filter((row) => row.leftAt === null);
+  const activeCircleIds = activePeriods.map((row) => row.circleId);
+  const oldestViewedAt = activePeriods.length
+    ? new Date(Math.min(...activePeriods.map((row) => row.lastViewedAt.getTime())))
+    : null;
+  const [unreadPostRows, unreadEventRows] = oldestViewedAt && activeCircleIds.length
+    ? await Promise.all([
+        db
+          .select({ circleId: posts.circleId, authorId: posts.authorId, createdAt: posts.createdAt })
+          .from(posts)
+          .where(
+            and(
+              inArray(posts.circleId, activeCircleIds),
+              sql`${posts.createdAt} > ${oldestViewedAt}`,
+            ),
+          ),
+        db
+          .select({ circleId: circleEvents.circleId, actorId: circleEvents.actorId, createdAt: circleEvents.createdAt })
+          .from(circleEvents)
+          .where(
+            and(
+              inArray(circleEvents.circleId, activeCircleIds),
+              sql`${circleEvents.createdAt} > ${oldestViewedAt}`,
+            ),
+          ),
+      ])
+    : [[], []];
+  const activePeriodByCircle = new Map(activePeriods.map((row) => [row.circleId, row]));
   const memberRows = circleIds.length
     ? await db
         .select({
@@ -116,6 +146,7 @@ export async function getCircleDashboard(userId: string) {
     updatedAt: string;
     isActive: boolean;
     members: Array<{ id: string; name: string; realName: string; image: string | null }>;
+    unread: { posts: number; comments: number; replies: number; changes: number; total: number };
   }>();
   for (const row of periodRows) {
     const existing = summaries.get(row.circleId);
@@ -138,7 +169,30 @@ export async function getCircleDashboard(userId: string) {
           realName,
           image,
         })),
+      unread: { posts: 0, comments: 0, replies: 0, changes: 0, total: 0 },
     });
+  }
+
+  for (const summary of summaries.values()) {
+    const activePeriod = activePeriodByCircle.get(summary.id);
+    if (!activePeriod) continue;
+    const unreadPosts = unreadPostRows.filter((row) =>
+      row.circleId === summary.id &&
+      row.authorId !== userId &&
+      row.createdAt > activePeriod.lastViewedAt
+    ).length;
+    const unreadChanges = unreadEventRows.filter((row) =>
+      row.circleId === summary.id &&
+      row.actorId !== userId &&
+      row.createdAt > activePeriod.lastViewedAt
+    ).length;
+    summary.unread = {
+      posts: unreadPosts,
+      comments: 0,
+      replies: 0,
+      changes: unreadChanges,
+      total: unreadPosts + unreadChanges,
+    };
   }
 
   const candidateRows = await db
@@ -321,6 +375,7 @@ export async function createCircle(
       userId: creatorId,
       visibleFrom: now,
       joinedAt: now,
+      lastViewedAt: now,
     });
     await transaction.insert(circleEvents).values({
       id: randomUUID(),
@@ -538,6 +593,7 @@ export async function respondToCircleProposal(
         userId,
         visibleFrom,
         joinedAt: now,
+        lastViewedAt: now,
       });
       await transaction
         .update(circleJoinProposals)

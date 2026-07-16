@@ -1,6 +1,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
+import { FeedSkeleton, SummaryListSkeleton } from "@/app/components/SkeletonReveal";
 import { auth } from "@/lib/auth";
 import { getCircleDashboard } from "@/lib/circles";
 import { getVisiblePosts } from "@/lib/content";
@@ -9,6 +11,7 @@ import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
 import { SocialHome } from "./SocialHome";
+import { HomeCircleList, HomeFriendList, HomeLatestFeed } from "./HomeSections";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +24,8 @@ export default async function HomePage() {
     redirect("/");
   }
 
-  const [currentUser, posts, ownPosts, friendRows, circleDashboard, initialDraft] = await Promise.all([
+  const [currentUser, ownPosts, friendRows, circleDashboard, initialDraft] = await Promise.all([
     getShellUser(session.user.id),
-    getVisiblePosts(session.user.id, { limit: 5 }),
     getVisiblePosts(session.user.id, { authorId: session.user.id, limit: 20 }),
     getFriends(session.user.id),
     getCircleDashboard(session.user.id),
@@ -47,10 +49,25 @@ export default async function HomePage() {
         displayName: friend.displayName,
         remark: friend.remark,
         image: friend.image,
+        bio: friend.bio,
       }))}
       initialDraft={initialDraft}
       key={boardMedia.map((media) => media.id).join(":") || "empty-board"}
-      posts={posts}
+      circleList={(
+        <Suspense fallback={<SummaryListSkeleton rows={2} />}>
+          <HomeCircleList userId={session.user.id} />
+        </Suspense>
+      )}
+      friendList={(
+        <Suspense fallback={<SummaryListSkeleton rows={3} />}>
+          <HomeFriendList userId={session.user.id} />
+        </Suspense>
+      )}
+      latestContent={(
+        <Suspense fallback={<FeedSkeleton rows={2} />}>
+          <HomeLatestFeed userId={session.user.id} />
+        </Suspense>
+      )}
     />
   );
 }

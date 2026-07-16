@@ -8,6 +8,7 @@ import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
+import { DissolveInput } from "@/app/components/DissolveField";
 import type { FriendSummary } from "@/lib/content-types";
 
 export function FriendsClient({
@@ -75,7 +76,13 @@ export function FriendsClient({
           <label className="friend-search">
             <Search aria-hidden="true" size={18} />
             <span className="sr-only">搜索朋友</span>
-            <input onChange={(event) => setQuery(event.target.value)} placeholder="搜索昵称、真名或备注" value={query} />
+            <DissolveInput
+              aria-label="搜索朋友"
+              onValueChange={setQuery}
+              placeholder="搜索昵称、真名或备注"
+              value={query}
+              wrapperClassName="friend-search-field"
+            />
           </label>
         </div>
 

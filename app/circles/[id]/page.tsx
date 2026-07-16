@@ -11,6 +11,7 @@ import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
 import { CircleComposer } from "./CircleComposer";
+import { CircleReadMarker } from "./CircleReadMarker";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,7 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
 
   return (
     <AppShell pageClassName="circle-detail-page" user={currentUser}>
+      {circle.isActive ? <CircleReadMarker circleId={circle.id} /> : null}
       <header className="circle-detail-header">
         <Link href="/circles" aria-label="返回圈子列表">←</Link>
         <div><span>{circle.status === "forming" ? "等待成员" : circle.isActive ? "共同生活册" : "历史档案"}</span><strong>{circle.name}</strong></div>
@@ -69,6 +71,7 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
                 displayName: friend.displayName,
                 remark: friend.remark,
                 image: friend.image,
+                bio: friend.bio,
               }))}
               posts={posts}
             />

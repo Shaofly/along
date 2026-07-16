@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
+import { DissolveTextarea } from "@/app/components/DissolveField";
 
 const managementOptions = [
   { value: "creator", label: "仅我管理" },
@@ -75,12 +76,13 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
         <span>{circleName}</span>
         <small>仅当前有权访问这个圈子的成员可见</small>
       </div>
-      <textarea
+      <DissolveTextarea
         aria-label="圈子动态正文"
         maxLength={5000}
-        onChange={(event) => setBody(event.target.value)}
+        onValueChange={setBody}
         placeholder="把一起经历的一点小事，留在这里……"
         value={body}
+        wrapperClassName="composer-writing-surface"
       />
       {previews.length ? (
         <div className="upload-previews">

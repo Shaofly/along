@@ -187,6 +187,7 @@ export async function getFriends(userId: string) {
       nickname: user.nickname,
       email: user.email,
       image: user.image,
+      bio: user.bio,
       remark: friendRemarks.remark,
     })
     .from(user)

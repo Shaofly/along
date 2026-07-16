@@ -37,6 +37,7 @@ export default async function ProfilePage({
         displayName: friend.displayName,
         remark: friend.remark,
         image: friend.image,
+        bio: friend.bio,
       }))}
       profile={profile}
     />

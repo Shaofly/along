@@ -83,6 +83,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             displayName: friend.displayName,
             remark: friend.remark,
             image: friend.image,
+            bio: friend.bio,
           }))}
           viewerIsActive={circle.isActive}
         />

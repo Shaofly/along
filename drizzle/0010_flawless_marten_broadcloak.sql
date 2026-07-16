@@ -1,0 +1,2 @@
+ALTER TABLE "circle_membership_periods" ADD COLUMN "last_viewed_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+ALTER TABLE "circle_membership_periods" ADD CONSTRAINT "circle_membership_viewed_ordered" CHECK ("circle_membership_periods"."last_viewed_at" >= "circle_membership_periods"."joined_at");

@@ -11,6 +11,7 @@ import { and, eq, gt, inArray, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  friendRemarks,
   friendships,
   invitations,
   invitationSponsors,
@@ -178,8 +179,31 @@ export async function getFriends(userId: string) {
     return [];
   }
 
-  return db
-    .select({ id: user.id, name: user.name, email: user.email, image: user.image })
+  const rows = await db
+    .select({
+      id: user.id,
+      name: user.name,
+      realName: user.realName,
+      nickname: user.nickname,
+      email: user.email,
+      image: user.image,
+      remark: friendRemarks.remark,
+    })
     .from(user)
+    .leftJoin(
+      friendRemarks,
+      and(
+        eq(friendRemarks.ownerId, userId),
+        eq(friendRemarks.friendId, user.id),
+      ),
+    )
     .where(inArray(user.id, friendIds));
+
+  return rows.map((friend) => ({
+    ...friend,
+    identityName: friend.nickname
+      ? `${friend.nickname}（${friend.realName}）`
+      : friend.realName,
+    displayName: friend.remark ?? friend.nickname ?? friend.realName,
+  }));
 }

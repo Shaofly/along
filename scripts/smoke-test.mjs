@@ -18,6 +18,7 @@ const users = [
   { name: "冒烟测试乙", email: `along-b-${suffix}@example.invalid`, password: `Along-test-${suffix}-B` },
 ];
 const createdPostIds = [];
+const createdCircleIds = [];
 
 function cookieFrom(response) {
   return response.headers
@@ -143,6 +144,94 @@ try {
   });
   await assertStatus(profileUpdate, 200);
 
+  const circleCreate = await api("/api/circles", {
+    method: "POST",
+    headers: { cookie: cookieA, "content-type": "application/json" },
+    body: JSON.stringify({
+      name: `冒烟小圈子 ${suffix}`,
+      description: "验证成员周期与历史快照。",
+      invitedUserIds: [ids.get(users[1].email)],
+    }),
+  });
+  await assertStatus(circleCreate, 200);
+  const { circleId } = await circleCreate.json();
+  createdCircleIds.push(circleId);
+  const proposalRows = await pool.query(
+    `select id from circle_join_proposals where circle_id = $1 and candidate_id = $2`,
+    [circleId, ids.get(users[1].email)],
+  );
+  assert.equal(proposalRows.rowCount, 1);
+  const initialAccept = await api(`/api/circles/proposals/${proposalRows.rows[0].id}/respond`, {
+    method: "POST",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({ decision: "accept" }),
+  });
+  await assertStatus(initialAccept, 200);
+
+  const circleMedia = await upload(cookieA, { r: 221, g: 205, b: 177 });
+  const circlePost = await createPost(cookieA, {
+    body: `退出前共同记录 ${suffix}`,
+    circleId,
+    managementMode: "circle",
+    visibility: "private",
+    viewerIds: [],
+    mediaIds: [circleMedia.id],
+  });
+  const memberCirclePage = await api(`/circles/${circleId}`, { headers: { cookie: cookieB } });
+  assert.equal(memberCirclePage.status, 200);
+  assert.match(await memberCirclePage.text(), new RegExp(`退出前共同记录 ${suffix}`));
+
+  const currentPost = await pool.query(`select updated_at from posts where id = $1`, [circlePost.id]);
+  const sharedEdit = await api(`/api/posts/${circlePost.id}`, {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      body: `退出时保存的版本 ${suffix}`,
+      managementMode: "circle",
+      viewerIds: [],
+      expectedUpdatedAt: currentPost.rows[0].updated_at.toISOString(),
+    }),
+  });
+  await assertStatus(sharedEdit, 200);
+
+  const leaveResponse = await api(`/api/circles/${circleId}/leave`, {
+    method: "POST",
+    headers: { cookie: cookieB },
+  });
+  await assertStatus(leaveResponse, 200);
+  const afterSharedEdit = await pool.query(`select updated_at from posts where id = $1`, [circlePost.id]);
+  const creatorEdit = await api(`/api/posts/${circlePost.id}`, {
+    method: "PATCH",
+    headers: { cookie: cookieA, "content-type": "application/json" },
+    body: JSON.stringify({
+      body: `退出后的新版本 ${suffix}`,
+      managementMode: "circle",
+      viewerIds: [],
+      expectedUpdatedAt: afterSharedEdit.rows[0].updated_at.toISOString(),
+    }),
+  });
+  await assertStatus(creatorEdit, 200);
+  const historicalPage = await api(`/circles/${circleId}`, { headers: { cookie: cookieB } });
+  const historicalHtml = await historicalPage.text();
+  assert.match(historicalHtml, new RegExp(`退出时保存的版本 ${suffix}`));
+  assert.doesNotMatch(historicalHtml, new RegExp(`退出后的新版本 ${suffix}`));
+  const historicalImage = await api(`/api/media/${circleMedia.id}`, { headers: { cookie: cookieB } });
+  assert.equal(historicalImage.status, 200);
+
+  const afterLeaveMedia = await upload(cookieA, { r: 183, g: 208, b: 216 });
+  await createPost(cookieA, {
+    body: `退出后新增记录 ${suffix}`,
+    circleId,
+    managementMode: "creator",
+    visibility: "private",
+    viewerIds: [],
+    mediaIds: [afterLeaveMedia.id],
+  });
+  const historicalPageAfterNewPost = await api(`/circles/${circleId}`, { headers: { cookie: cookieB } });
+  assert.doesNotMatch(await historicalPageAfterNewPost.text(), new RegExp(`退出后新增记录 ${suffix}`));
+  const forbiddenFutureImage = await api(`/api/media/${afterLeaveMedia.id}`, { headers: { cookie: cookieB } });
+  assert.equal(forbiddenFutureImage.status, 404);
+
   for (const post of createdPostIds) {
     const response = await api(`/api/posts/${post.id}`, {
       method: "DELETE",
@@ -151,7 +240,7 @@ try {
     await assertStatus(response, 200);
   }
   createdPostIds.length = 0;
-  console.log("Smoke test passed: auth, friendship visibility, private media, EXIF removal, profile update, and cleanup.");
+  console.log("Smoke test passed: auth, personal visibility, private media, circles, shared editing, exit snapshots, future-content isolation, and cleanup.");
 } finally {
   const rows = await pool.query(
     `select id from "user" where email = any($1::text[])`,
@@ -164,6 +253,7 @@ try {
       [userIds],
     );
     await pool.query(`delete from posts where author_id = any($1::text[])`, [userIds]);
+    await pool.query(`delete from circles where created_by_id = any($1::text[])`, [userIds]);
     await pool.query(`delete from media_assets where owner_id = any($1::text[])`, [userIds]);
     await pool.query(
       `delete from friendships where user_one_id = any($1::text[]) or user_two_id = any($1::text[])`,

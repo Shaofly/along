@@ -19,7 +19,8 @@ export function SetupForm({ existingCount }: { existingCount: number }) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: form.get("name"),
+        realName: form.get("realName"),
+        nickname: form.get("nickname"),
         email: form.get("email"),
         password: form.get("password"),
         bootstrapKey: form.get("bootstrapKey"),
@@ -55,8 +56,12 @@ export function SetupForm({ existingCount }: { existingCount: number }) {
       {notice ? <p className="form-notice success">{notice}</p> : null}
       {error ? <p className="form-notice error">{error}</p> : null}
       <label>
-        昵称
-        <input name="name" maxLength={40} required />
+        真实姓名
+        <input name="realName" maxLength={40} required />
+      </label>
+      <label>
+        昵称 <small>选填</small>
+        <input name="nickname" maxLength={40} />
       </label>
       <label>
         邮箱

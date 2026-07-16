@@ -1,40 +1,37 @@
-import Link from "next/link";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { PostStream } from "@/app/components/PostStream";
+import { AppShell } from "@/app/components/AppShell";
 import { auth } from "@/lib/auth";
 import { getVisiblePosts } from "@/lib/content";
 import { getFriends } from "@/lib/invitations";
+import { getShellUser } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
 export default async function FeedPage() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/");
-  const [posts, friendRows] = await Promise.all([
+  const [currentUser, posts, friendRows] = await Promise.all([
+    getShellUser(session.user.id),
     getVisiblePosts(session.user.id, { limit: 50 }),
     getFriends(session.user.id),
   ]);
+  if (!currentUser) redirect("/");
   const friends = friendRows.map((friend) => ({
     id: friend.id,
     name: friend.name,
+    realName: friend.realName,
+    nickname: friend.nickname,
+    identityName: friend.identityName,
+    displayName: friend.displayName,
+    remark: friend.remark,
     image: friend.image,
   }));
 
   return (
-    <main className="app-page profile-page">
-      <header className="app-header">
-        <Link className="brand" href="/home">
-          <span className="brand-mark" aria-hidden="true">圆</span>
-          <span>圆个圈 <small>Along</small></span>
-        </Link>
-        <nav className="app-nav">
-          <Link href="/home">首页</Link>
-          <Link className="active" href="/feed">动态</Link>
-          <Link href={`/profile/${session.user.id}`}>我的空间</Link>
-        </nav>
-      </header>
+    <AppShell pageClassName="profile-page" user={currentUser}>
       <section className="full-feed-page">
         <div className="section-line-heading">
           <div>
@@ -43,8 +40,8 @@ export default async function FeedPage() {
           </div>
           <span>{posts.length} 条可见</span>
         </div>
-        <PostStream currentUserId={session.user.id} friends={friends} posts={posts} />
+        <PostStream friends={friends} posts={posts} />
       </section>
-    </main>
+    </AppShell>
   );
 }

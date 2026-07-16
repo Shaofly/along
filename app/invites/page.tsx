@@ -4,9 +4,11 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { db } from "@/db";
+import { AppShell } from "@/app/components/AppShell";
 import { invitations, invitationSponsors, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { decryptInvitationCode, getFriends } from "@/lib/invitations";
+import { getShellUser } from "@/lib/users";
 
 import { InviteManager } from "./InviteManager";
 
@@ -19,7 +21,8 @@ export default async function InvitesPage() {
   }
 
   const creator = alias(user, "creator");
-  const [friends, pendingInvitations, createdRows] = await Promise.all([
+  const [currentUser, friends, pendingInvitations, createdRows] = await Promise.all([
+    getShellUser(session.user.id),
     getFriends(session.user.id),
     db
       .select({
@@ -62,6 +65,7 @@ export default async function InvitesPage() {
       .groupBy(invitations.id)
       .orderBy(sql`${invitations.createdAt} desc`),
   ]);
+  if (!currentUser) redirect("/");
 
   const createdInvitations = createdRows.map((invitation) => ({
     id: invitation.id,
@@ -78,14 +82,7 @@ export default async function InvitesPage() {
   }));
 
   return (
-    <main className="invites-shell">
-      <header className="invites-topbar">
-        <a className="brand" href="/home">
-          <span className="brand-mark" aria-hidden="true">圆</span>
-          <span>圆个圈 <small>Along</small></span>
-        </a>
-        <a className="secondary-action" href="/home">返回主页</a>
-      </header>
+    <AppShell pageClassName="invites-shell" user={currentUser}>
       <div className="invites-intro">
         <p className="eyebrow">熟人共同确认，关系才真正开始</p>
         <h1>邀请朋友加入</h1>
@@ -102,6 +99,6 @@ export default async function InvitesPage() {
         }))}
         createdInvitations={createdInvitations}
       />
-    </main>
+    </AppShell>
   );
 }

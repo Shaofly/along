@@ -36,6 +36,34 @@
       "when": 1784153964641,
       "tag": "0004_watery_mandarin",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784161632398,
+      "tag": "0005_chunky_forge",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784186468269,
+      "tag": "0006_dapper_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784187086621,
+      "tag": "0007_previous_synch",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784203617338,
+      "tag": "0008_freezing_wasp",
+      "breakpoints": true
     }
   ]
 }

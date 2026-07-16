@@ -1,34 +1,38 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { PostStream } from "@/app/components/PostStream";
+import { AppShell, type ShellUser } from "@/app/components/AppShell";
 import type { FeedPost, FriendSummary } from "@/lib/content-types";
 
 type Profile = {
   id: string;
   name: string;
+  realName: string;
+  nickname: string | null;
   image: string | null;
   bio: string;
   createdAt: string;
   isSelf: boolean;
+  isLimitedByCircle?: boolean;
   posts: FeedPost[];
 };
 
 export function ProfileView({
   profile,
-  currentUser,
   friends,
+  currentUser,
 }: {
   profile: Profile;
-  currentUser: { id: string; name: string };
   friends: FriendSummary[];
+  currentUser: ShellUser;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(profile.name);
+  const [realName, setRealName] = useState(profile.realName);
+  const [nickname, setNickname] = useState(profile.nickname ?? "");
   const [bio, setBio] = useState(profile.bio);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -40,7 +44,7 @@ export function ProfileView({
     const response = await fetch("/api/profile", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, bio }),
+      body: JSON.stringify({ realName, nickname, bio }),
     });
     const result = (await response.json()) as { error?: string };
     setPending(false);
@@ -53,23 +57,15 @@ export function ProfileView({
   }
 
   return (
-    <main className="app-page profile-page">
-      <header className="app-header">
-        <Link className="brand" href="/home">
-          <span className="brand-mark" aria-hidden="true">圆</span>
-          <span>圆个圈 <small>Along</small></span>
-        </Link>
-        <nav className="app-nav">
-          <Link href="/home">首页</Link>
-          <Link className="active" href={`/profile/${profile.id}`}>个人空间</Link>
-        </nav>
-      </header>
-
+    <AppShell pageClassName="profile-page" user={currentUser}>
       <section className="profile-hero">
         <div className="profile-avatar">{profile.name.slice(0, 1)}</div>
         <div>
-          <p className="eyebrow">{profile.isSelf ? "我的个人空间" : "朋友的个人空间"}</p>
+          <p className="eyebrow">
+            {profile.isSelf ? "我的个人空间" : profile.isLimitedByCircle ? "共同圈子成员" : "朋友的个人空间"}
+          </p>
           <h1>{profile.name}</h1>
+          {profile.nickname ? <p className="profile-real-name">{profile.realName}</p> : null}
           <p>{profile.bio || (profile.isSelf ? "可以写一句简单的自我介绍。" : "这个人还没有写简介。")}</p>
           <small>从 {new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(profile.createdAt))} 开始在这里记录</small>
         </div>
@@ -86,14 +82,15 @@ export function ProfileView({
           </div>
           <span>{profile.posts.length} 条可见</span>
         </div>
-        <PostStream currentUserId={currentUser.id} friends={friends} posts={profile.posts} />
+        <PostStream friends={friends} posts={profile.posts} />
       </section>
 
       {editing ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setEditing(false)}>
           <form className="edit-modal profile-editor" onMouseDown={(event) => event.stopPropagation()} onSubmit={saveProfile}>
             <header><h2>编辑个人资料</h2><button onClick={() => setEditing(false)} type="button" aria-label="关闭">×</button></header>
-            <label>昵称<input maxLength={40} onChange={(event) => setName(event.target.value)} value={name} /></label>
+            <label>真实姓名<input maxLength={40} onChange={(event) => setRealName(event.target.value)} required value={realName} /></label>
+            <label>昵称 <small>选填</small><input maxLength={40} onChange={(event) => setNickname(event.target.value)} value={nickname} /></label>
             <label>简介<textarea maxLength={160} onChange={(event) => setBio(event.target.value)} value={bio} /></label>
             <small>{bio.length} / 160</small>
             {error ? <p className="composer-error">{error}</p> : null}
@@ -101,6 +98,6 @@ export function ProfileView({
           </form>
         </div>
       ) : null}
-    </main>
+    </AppShell>
   );
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "friendships" DROP CONSTRAINT "friendships_canonical_order";--> statement-breakpoint
+CREATE UNIQUE INDEX "friendships_unordered_pair_idx" ON "friendships" USING btree (least("user_one_id", "user_two_id"),greatest("user_one_id", "user_two_id"));

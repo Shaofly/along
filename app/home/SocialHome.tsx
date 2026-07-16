@@ -3,25 +3,25 @@
 /* eslint-disable @next/next/no-img-element -- Private media and local previews require browser-side URLs. */
 
 import Link from "next/link";
+import Image from "next/image";
 import {
-  type CSSProperties,
   FormEvent,
-  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
 
 import { PostStream } from "@/app/components/PostStream";
-import { authClient } from "@/lib/auth-client";
+import { AppShell, type ShellUser } from "@/app/components/AppShell";
+import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import type {
   FeedPost,
+  CircleSummary,
   FriendSummary,
   PostVisibility,
 } from "@/lib/content-types";
-
-type CurrentUser = { id: string; name: string };
 
 const warmNotes = [
   "不用把今天写得完整，留下一点就很好。",
@@ -31,9 +31,19 @@ const warmNotes = [
 ];
 
 const visibilityOptions = [
-  ["friends", "朋友"],
-  ["selected", "指定朋友"],
-  ["private", "仅自己"],
+  { value: "friends", label: "朋友" },
+  { value: "selected", label: "指定朋友" },
+  { value: "private", label: "仅自己" },
+] as const;
+
+const publishSpaceOptions = [
+  { value: "personal", label: "我的空间" },
+  { value: "circle", label: "小圈子" },
+] as const;
+
+const managementOptions = [
+  { value: "creator", label: "仅我管理" },
+  { value: "circle", label: "共同管理" },
 ] as const;
 
 export function SocialHome({
@@ -41,17 +51,21 @@ export function SocialHome({
   friends,
   posts,
   boardMedia,
+  circles,
 }: {
-  currentUser: CurrentUser;
+  currentUser: ShellUser;
   friends: FriendSummary[];
   posts: FeedPost[];
   boardMedia: FeedPost["media"];
+  circles: CircleSummary[];
 }) {
   const router = useRouter();
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [visibility, setVisibility] = useState<PostVisibility>("friends");
-  const [visibilitySliderPosition, setVisibilitySliderPosition] = useState<number | null>(null);
+  const [publishSpace, setPublishSpace] = useState<"personal" | "circle">("personal");
+  const [selectedCircleId, setSelectedCircleId] = useState(circles[0]?.id ?? "");
+  const [managementMode, setManagementMode] = useState<"creator" | "circle">("creator");
   const [viewerIds, setViewerIds] = useState<string[]>([]);
   const boardItemIds = useMemo(
     () => [0, 1, 2].map((index) => boardMedia[index]?.id ?? `empty-${index}`),
@@ -64,6 +78,8 @@ export function SocialHome({
   const [boardOrder, setBoardOrder] = useState(defaultBoardOrder);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [publisherOpen, setPublisherOpen] = useState(false);
+  const composerRef = useRef<HTMLDivElement>(null);
   const previews = useMemo(
     () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
     [files],
@@ -87,6 +103,15 @@ export function SocialHome({
     return () => window.clearTimeout(resetTimer);
   }, [boardOrder, defaultBoardOrder]);
 
+  useEffect(() => {
+    if (!publisherOpen || body.trim() || files.length) return;
+    function closeEmptyPublisher(event: PointerEvent) {
+      if (!composerRef.current?.contains(event.target as Node)) setPublisherOpen(false);
+    }
+    document.addEventListener("pointerdown", closeEmptyPublisher);
+    return () => document.removeEventListener("pointerdown", closeEmptyPublisher);
+  }, [body, files.length, publisherOpen]);
+
   function bringBoardItemForward(itemId: string) {
     setBoardOrder((current) => [
       ...current.filter((currentId) => currentId !== itemId),
@@ -99,33 +124,6 @@ export function SocialHome({
     if (nextVisibility !== "selected") setViewerIds([]);
   }
 
-  function getVisibilityPosition(event: ReactPointerEvent<HTMLDivElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return Math.max(
-      0,
-      Math.min(2, ((event.clientX - bounds.left) / bounds.width) * 3 - 0.5),
-    );
-  }
-
-  function beginVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setVisibilitySliderPosition(getVisibilityPosition(event));
-  }
-
-  function moveVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    setVisibilitySliderPosition(getVisibilityPosition(event));
-  }
-
-  function finishVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    const nextIndex = Math.round(getVisibilityPosition(event));
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    setVisibilitySliderPosition(null);
-    chooseVisibility(visibilityOptions[nextIndex][0]);
-  }
-
   function chooseFiles(selected: FileList | null) {
     if (!selected) return;
     const next = Array.from(selected).slice(0, 20);
@@ -136,8 +134,12 @@ export function SocialHome({
   async function publish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!body.trim() && files.length === 0) return;
-    if (visibility === "selected" && viewerIds.length === 0) {
+    if (publishSpace === "personal" && visibility === "selected" && viewerIds.length === 0) {
       setError("请至少选择一位朋友。条目只会给你选中的人看见。");
+      return;
+    }
+    if (publishSpace === "circle" && !selectedCircleId) {
+      setError("请先选择一个小圈子。");
       return;
     }
 
@@ -167,8 +169,10 @@ export function SocialHome({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           body,
-          visibility,
-          viewerIds: visibility === "selected" ? viewerIds : [],
+          visibility: publishSpace === "personal" ? visibility : "private",
+          viewerIds: publishSpace === "personal" && visibility === "selected" ? viewerIds : [],
+          circleId: publishSpace === "circle" ? selectedCircleId : null,
+          managementMode,
           mediaIds: uploadedIds,
         }),
       });
@@ -179,6 +183,8 @@ export function SocialHome({
       setFiles([]);
       setViewerIds([]);
       setVisibility("friends");
+      setManagementMode("creator");
+      setPublisherOpen(false);
       router.refresh();
     } catch (publishError) {
       await Promise.all(
@@ -191,82 +197,58 @@ export function SocialHome({
   }
 
   return (
-    <main className="app-page">
-      <header className="app-header">
-        <Link className="brand" href="/home">
-          <span className="brand-mark" aria-hidden="true">圆</span>
-          <span>圆个圈 <small>Along</small></span>
-        </Link>
-        <nav className="app-nav" aria-label="主要导航">
-          <Link className="active" href="/home">首页</Link>
-          <Link href="/invites">朋友</Link>
-          <details className="account-menu">
-            <summary aria-label="打开个人菜单">{currentUser.name.slice(0, 1)}</summary>
-            <div>
-              <Link href={`/profile/${currentUser.id}`}>我的空间</Link>
-              <Link href="/invites">共同邀请</Link>
-              <button
-                type="button"
-                onClick={async () => {
-                  await authClient.signOut();
-                  window.location.href = "/";
-                }}
-              >
-                退出登录
-              </button>
-            </div>
-          </details>
-        </nav>
-      </header>
-
-      <section className="home-intro">
-        <div>
+    <AppShell pageClassName="home-page" user={currentUser}>
+      <div className="home-dashboard">
+        <section className="home-welcome">
           <p className="eyebrow">欢迎回来，{currentUser.name}</p>
           <h1>最近有什么，想留给朋友看看？</h1>
           <p>{note}</p>
-        </div>
-        <aside className="memory-board" aria-label="最近留下的照片">
-          {[0, 1, 2].map((index) => {
-            const media = boardMedia[index];
-            const itemId = media?.id ?? `empty-${index}`;
-            return (
-              <button
-                aria-label={media ? `把照片 ${media.originalName} 放到最上面` : `把${["晚风", "一起", "最近"][index]}卡片放到最上面`}
-                aria-pressed={boardOrder.at(-1) === itemId}
-                className={`board-photo board-photo-${index + 1}${boardOrder.at(-1) === itemId ? " is-active" : ""}`}
-                key={itemId}
-                onClick={() => bringBoardItemForward(itemId)}
-                style={{ zIndex: boardOrder.indexOf(itemId) + 1 }}
-                type="button"
-              >
-                {media ? (
-                  <img alt={media.originalName} src={`/api/media/${media.id}`} />
-                ) : (
-                  <span>{["晚风", "一起", "最近"][index]}</span>
-                )}
-              </button>
-            );
-          })}
-          <button
-            aria-label="把暖心便签放到最上面"
-            aria-pressed={boardOrder.at(-1) === "note"}
-            className={`board-note${boardOrder.at(-1) === "note" ? " is-active" : ""}`}
-            onClick={() => bringBoardItemForward("note")}
-            style={{ zIndex: boardOrder.indexOf("note") + 1 }}
-            type="button"
-          >
-            {note}
-          </button>
-        </aside>
-      </section>
+        </section>
 
-      <div className="home-layout">
-        <div className="home-main">
-          <form className="real-composer" onSubmit={publish}>
+        <div className="home-composer" ref={composerRef}>
+          {!publisherOpen ? (
+            <button className="composer-launcher" onClick={() => setPublisherOpen(true)} type="button">
+              <span>{currentUser.name.slice(0, 1)}</span>
+              <strong>写点什么……</strong>
+              <small>留下一点今天发生的事</small>
+            </button>
+          ) : null}
+          <AnimatedReveal show={publisherOpen}>
+            <form className="real-composer" onSubmit={publish}>
             <div className="composer-context">
-              <span>个人动态</span>
-              <small>发布后显示在你的个人空间</small>
+              <span>{publishSpace === "personal" ? "个人动态" : circles.find((circle) => circle.id === selectedCircleId)?.name ?? "小圈子"}</span>
+              <small>{publishSpace === "personal" ? "发布后显示在你的个人空间" : "只留给圈内有权访问的成员"}</small>
             </div>
+            <SegmentedControl
+              ariaLabel="发布空间"
+              className="publish-space-control"
+              onValueChange={setPublishSpace}
+              options={publishSpaceOptions.map((option) => ({
+                ...option,
+                disabled: option.value === "circle" && circles.length === 0,
+              }))}
+              value={publishSpace}
+            />
+            <AnimatedReveal show={publishSpace === "circle"}>
+              <div className="circle-publish-options">
+                <label>
+                  发布到
+                  <select onChange={(event) => setSelectedCircleId(event.target.value)} value={selectedCircleId}>
+                    {circles.map((circle) => <option key={circle.id} value={circle.id}>{circle.name}</option>)}
+                  </select>
+                </label>
+                <div role="group" aria-label="管理方式">
+                  <span>管理方式</span>
+                  <SegmentedControl
+                    ariaLabel="圈子动态管理方式"
+                    className="segmented-control--compact"
+                    onValueChange={setManagementMode}
+                    options={managementOptions}
+                    value={managementMode}
+                  />
+                </div>
+              </div>
+            </AnimatedReveal>
             <label className="sr-only" htmlFor="post-body">动态正文</label>
             <textarea
               id="post-body"
@@ -294,36 +276,17 @@ export function SocialHome({
               </div>
             ) : null}
 
-            <div
-              aria-label="可见范围"
-              className={`visibility-control${visibilitySliderPosition === null ? "" : " dragging"}`}
-              onPointerCancel={() => setVisibilitySliderPosition(null)}
-              onPointerDown={beginVisibilityDrag}
-              onPointerMove={moveVisibilityDrag}
-              onPointerUp={finishVisibilityDrag}
-              role="group"
-              style={{
-                "--visibility-position":
-                  visibilitySliderPosition ??
-                  visibilityOptions.findIndex(([value]) => value === visibility),
-              } as CSSProperties}
-            >
-              {visibilityOptions.map(([value, label]) => (
-                <button
-                  aria-pressed={visibility === value}
-                  className={visibility === value ? "active" : ""}
-                  key={value}
-                  onClick={(event) => {
-                    if (event.detail === 0) chooseVisibility(value);
-                  }}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <AnimatedReveal show={publishSpace === "personal"}>
+              <SegmentedControl
+                ariaLabel="可见范围"
+                className="visibility-control"
+                onValueChange={chooseVisibility}
+                options={visibilityOptions}
+                value={visibility}
+              />
+            </AnimatedReveal>
 
-            {visibility === "selected" ? (
+            <AnimatedReveal show={publishSpace === "personal" && visibility === "selected"}>
               <fieldset className="friend-picker">
                 <legend>选择能看到这条动态的朋友</legend>
                 {friends.map((friend) => (
@@ -343,7 +306,7 @@ export function SocialHome({
                   </label>
                 ))}
               </fieldset>
-            ) : null}
+            </AnimatedReveal>
 
             {error ? <p className="composer-error">{error}</p> : null}
             <div className="composer-tools">
@@ -365,45 +328,89 @@ export function SocialHome({
                 {pending ? "正在发布" : "发布"}
               </button>
             </div>
-          </form>
-
-          <section className="latest-section">
-            <div className="section-line-heading">
-              <div>
-                <p className="eyebrow">最近动态</p>
-                <h2>朋友们新留下的片段</h2>
-              </div>
-              <Link href="/feed">查看全部</Link>
-            </div>
-            <PostStream
-              currentUserId={currentUser.id}
-              friends={friends}
-              posts={posts}
-            />
-          </section>
+            </form>
+          </AnimatedReveal>
         </div>
 
-        <aside className="home-aside">
-          <section>
-            <div className="aside-heading">
-              <h2>朋友</h2>
-              <Link href="/invites">邀请</Link>
-            </div>
-            <div className="friend-list">
-              {friends.length > 0 ? friends.map((friend) => (
-                <Link href={`/profile/${friend.id}`} key={friend.id}>
-                  <span>{friend.name.slice(0, 1)}</span>
-                  <strong>{friend.name}</strong>
-                </Link>
-              )) : <p>还没有朋友，先完成一次共同邀请。</p>}
-            </div>
-          </section>
-          <section className="future-links">
-            <span>慢慢长出来的地方</span>
-            <p>圈子、足迹和胶囊会在后续版本依次来到这里。</p>
-          </section>
+        <aside className="memory-board" aria-label="最近留下的照片">
+          {[0, 1, 2].map((index) => {
+            const media = boardMedia[index];
+            const itemId = media?.id ?? `empty-${index}`;
+            return (
+              <button
+                aria-label={media ? `把照片 ${media.originalName} 放到最上面` : `把${["晚风", "一起", "最近"][index]}卡片放到最上面`}
+                aria-pressed={boardOrder.at(-1) === itemId}
+                className={`board-photo board-photo-${index + 1}${boardOrder.at(-1) === itemId ? " is-active" : ""}`}
+                key={itemId}
+                onClick={() => bringBoardItemForward(itemId)}
+                style={{ zIndex: boardOrder.indexOf(itemId) + 1 }}
+                type="button"
+              >
+                {media ? <img alt={media.originalName} src={`/api/media/${media.id}`} /> : null}
+                <span className="photo-glass-label">{["晚风", "一起", "最近"][index]}</span>
+              </button>
+            );
+          })}
+          <button
+            aria-label="把暖心便签放到最上面"
+            aria-pressed={boardOrder.at(-1) === "note"}
+            className={`board-note${boardOrder.at(-1) === "note" ? " is-active" : ""}`}
+            onClick={() => bringBoardItemForward("note")}
+            style={{ zIndex: boardOrder.indexOf("note") + 1 }}
+            type="button"
+          >
+            {note}
+          </button>
         </aside>
+
+        <section className="home-circle-section home-summary-section">
+          <div className="home-section-heading">
+            <div><p className="eyebrow">圈子</p><h2>一起留下的地方</h2></div>
+            <Link href="/circles">查看全部</Link>
+          </div>
+          <div className="home-circle-list">
+            {circles.length ? circles.slice(0, 3).map((circle, index) => (
+              <Link className={`home-circle-item circle-tone-${(index % 3) + 1}`} href={`/circles/${circle.id}`} key={circle.id}>
+                <span className="home-circle-cover">{circle.name.slice(0, 1)}</span>
+                <span><strong>{circle.name}</strong><small>{circle.description || `${circle.members.length} 位成员在这里记录`}</small></span>
+                <span className="mini-avatar-stack" aria-label={`${circle.members.length} 位成员`}>
+                  {circle.members.slice(0, 3).map((member) => <i key={member.id}>{member.name.slice(0, 1)}</i>)}
+                </span>
+              </Link>
+            )) : <p className="summary-empty">还没有小圈子，等一群熟悉的人慢慢聚到这里。</p>}
+          </div>
+        </section>
+
+        <section className="home-friend-section home-summary-section">
+          <div className="home-section-heading">
+            <div><p className="eyebrow">朋友</p><h2>熟悉的人</h2></div>
+            <Link href="/friends">查看全部</Link>
+          </div>
+          <div className="home-friend-list">
+            {friends.length ? friends.slice(0, 5).map((friend) => (
+              <Link href={`/profile/${friend.id}`} key={friend.id}>
+                <span className="friend-avatar">{friend.image ? <img alt="" src={friend.image} /> : friend.displayName.slice(0, 1)}</span>
+                <span><strong>{friend.displayName}</strong>{friend.displayName !== friend.identityName ? <small>{friend.identityName}</small> : friend.nickname ? <small>{friend.realName}</small> : null}</span>
+              </Link>
+            )) : <p className="summary-empty">完成共同邀请后，朋友会自然出现在这里。</p>}
+          </div>
+        </section>
+
+        <section className="latest-section">
+          <div className="section-line-heading">
+            <div>
+              <p className="eyebrow">最近动态</p>
+              <h2>朋友们新留下的片段</h2>
+            </div>
+            <Link href="/feed">查看全部</Link>
+          </div>
+          <PostStream friends={friends} posts={posts} />
+        </section>
       </div>
-    </main>
+
+      <footer className="mobile-home-signature">
+        <Image alt="圆个圈 Along" height={80} src="/branding/along-logo.png" width={200} />
+      </footer>
+    </AppShell>
   );
 }

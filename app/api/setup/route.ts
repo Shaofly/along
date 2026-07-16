@@ -8,7 +8,8 @@ import { friendships, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 
 const setupSchema = z.object({
-  name: z.string().trim().min(1, "请输入昵称").max(40),
+  realName: z.string().trim().min(1, "请输入真实姓名").max(40),
+  nickname: z.string().trim().max(40).optional().transform((value) => value || null),
   email: z.email("请输入有效邮箱").transform((value) => value.toLowerCase()),
   password: z.string().min(10, "密码至少需要 10 位").max(128),
   bootstrapKey: z.string().min(1, "请输入创建密钥"),
@@ -45,7 +46,9 @@ export async function POST(request: Request) {
         .limit(1);
       const result = await auth.api.signUpEmail({
         body: {
-          name: parsed.data.name,
+          name: parsed.data.nickname ?? parsed.data.realName,
+          realName: parsed.data.realName,
+          nickname: parsed.data.nickname ?? undefined,
           email: parsed.data.email,
           password: parsed.data.password,
         },

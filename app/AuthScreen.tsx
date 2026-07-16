@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import Link from "next/link";
 
+import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import { authClient } from "@/lib/auth-client";
 
 type Mode = "login" | "register";
@@ -50,7 +51,8 @@ export function AuthScreen() {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: form.get("name"),
+        realName: form.get("realName"),
+        nickname: form.get("nickname"),
         email: form.get("email"),
         password: form.get("password"),
         inviteCode: form.get("inviteCode"),
@@ -90,32 +92,20 @@ export function AuthScreen() {
       </section>
 
       <section className="auth-panel" aria-label="账号入口">
-        <div className="auth-tabs" role="tablist" aria-label="登录或注册">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "login"}
-            className={mode === "login" ? "active" : ""}
-            onClick={() => {
-              setMode("login");
-              setError("");
-            }}
-          >
-            登录
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "register"}
-            className={mode === "register" ? "active" : ""}
-            onClick={() => {
-              setMode("register");
-              setError("");
-            }}
-          >
-            邀请注册
-          </button>
-        </div>
+        <SegmentedControl
+          ariaLabel="登录或注册"
+          className="auth-tabs segmented-control--dark"
+          onValueChange={(nextMode) => {
+            setMode(nextMode);
+            setError("");
+          }}
+          options={[
+            { value: "login", label: "登录" },
+            { value: "register", label: "邀请注册" },
+          ]}
+          role="tablist"
+          value={mode}
+        />
 
         <div className="auth-heading">
           <span>{mode === "login" ? "朋友入口" : "带着邀请来"}</span>
@@ -130,7 +120,7 @@ export function AuthScreen() {
         {notice ? <p className="form-notice success">{notice}</p> : null}
         {error ? <p className="form-notice error">{error}</p> : null}
 
-        {mode === "login" ? (
+        <AnimatedReveal show={mode === "login"}>
           <form className="auth-form" onSubmit={submitLogin}>
             <label>
               邮箱
@@ -150,11 +140,17 @@ export function AuthScreen() {
               {pending ? "正在登录…" : "进入小站"}
             </button>
           </form>
-        ) : (
+        </AnimatedReveal>
+        <AnimatedReveal show={mode === "register"}>
           <form className="auth-form" onSubmit={submitRegistration}>
             <label>
-              昵称
-              <input name="name" autoComplete="nickname" maxLength={40} required />
+              真实姓名
+              <input name="realName" autoComplete="name" maxLength={40} required />
+              <small>这是熟人平台，真名会在个人页和朋友列表中显示。</small>
+            </label>
+            <label>
+              昵称 <small>选填</small>
+              <input name="nickname" autoComplete="nickname" maxLength={40} />
             </label>
             <label>
               邮箱
@@ -179,7 +175,7 @@ export function AuthScreen() {
               {pending ? "正在确认邀请…" : "接受邀请并注册"}
             </button>
           </form>
-        )}
+        </AnimatedReveal>
 
         <Link className="setup-link" href="/setup">
           首次部署：创建两位创始成员

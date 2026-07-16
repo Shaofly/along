@@ -1,6 +1,6 @@
 {
   "name": "along",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,10 +10,11 @@
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "node --env-file-if-exists=.env.local .next/standalone/server.js",
-    "test": "pnpm run lint && pnpm run typecheck",
+    "test": "pnpm run lint && pnpm run typecheck && pnpm run docs:check",
     "test:smoke": "node --env-file=.env.local scripts/smoke-test.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "docs:check": "node scripts/check-doc-links.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
@@ -21,6 +22,8 @@
   "dependencies": {
     "better-auth": "^1.6.23",
     "drizzle-orm": "0.45.2",
+    "lucide-react": "^1.24.0",
+    "motion": "^12.42.2",
     "next": "16.2.6",
     "pg": "^8.22.0",
     "react": "19.2.6",

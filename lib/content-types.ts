@@ -11,6 +11,18 @@ export type FeedPost = {
     name: string;
     image: string | null;
   };
+  circle: {
+    id: string;
+    name: string;
+  } | null;
+  managementMode: "creator" | "circle";
+  lastEditor: {
+    id: string;
+    name: string;
+  } | null;
+  canEdit: boolean;
+  canDelete: boolean;
+  isHistorical: boolean;
   media: Array<{
     id: string;
     originalName: string;
@@ -19,8 +31,27 @@ export type FeedPost = {
   viewerIds: string[];
 };
 
+export type CircleSummary = {
+  id: string;
+  name: string;
+  description: string;
+  status: "forming" | "active" | "dissolved";
+  isActive: boolean;
+  members: Array<{
+    id: string;
+    name: string;
+    realName: string;
+    image: string | null;
+  }>;
+};
+
 export type FriendSummary = {
   id: string;
   name: string;
+  realName: string;
+  nickname: string | null;
+  identityName: string;
+  displayName: string;
+  remark: string | null;
   image: string | null;
 };

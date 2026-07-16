@@ -8,10 +8,13 @@ import { db } from "@/db";
 import * as schema from "@/db/schema";
 
 const registrationGateSecret = process.env.REGISTRATION_GATE_SECRET;
-const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? "http://localhost:3000")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const trustedOrigins = [
+  ...(process.env.TRUSTED_ORIGINS ?? "http://localhost:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  "https://*.trycloudflare.com",
+];
 
 if (!registrationGateSecret) {
   throw new Error("REGISTRATION_GATE_SECRET is required.");
@@ -32,6 +35,16 @@ export const auth = betterAuth({
   },
   user: {
     additionalFields: {
+      realName: {
+        type: "string",
+        required: true,
+        input: true,
+      },
+      nickname: {
+        type: "string",
+        required: false,
+        input: true,
+      },
       role: {
         type: ["admin", "member"],
         required: true,

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import type {
   FeedPost,
   FriendSummary,
@@ -18,6 +19,12 @@ const visibilityLabels: Record<PostVisibility, string> = {
   private: "仅自己可见",
 };
 
+const editVisibilityOptions = [
+  { value: "friends", label: "朋友" },
+  { value: "selected", label: "指定朋友" },
+  { value: "private", label: "仅自己" },
+] as const;
+
 function displayTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
@@ -29,11 +36,9 @@ function displayTime(value: string) {
 
 export function PostStream({
   posts,
-  currentUserId,
   friends,
 }: {
   posts: FeedPost[];
-  currentUserId: string;
   friends: FriendSummary[];
 }) {
   const router = useRouter();
@@ -41,6 +46,7 @@ export function PostStream({
   const [editBody, setEditBody] = useState("");
   const [editVisibility, setEditVisibility] = useState<PostVisibility>("friends");
   const [editViewerIds, setEditViewerIds] = useState<string[]>([]);
+  const [editManagementMode, setEditManagementMode] = useState<"creator" | "circle">("creator");
   const [lightbox, setLightbox] = useState<{ src: string; alt: string; body: string } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -50,6 +56,7 @@ export function PostStream({
     setEditBody(post.body);
     setEditVisibility(post.visibility);
     setEditViewerIds(post.viewerIds);
+    setEditManagementMode(post.managementMode);
     setError("");
   }
 
@@ -65,6 +72,8 @@ export function PostStream({
         body: editBody,
         visibility: editVisibility,
         viewerIds: editVisibility === "selected" ? editViewerIds : [],
+        managementMode: editing.circle ? editManagementMode : undefined,
+        expectedUpdatedAt: editing.updatedAt,
       }),
     });
     const result = (await response.json()) as { error?: string };
@@ -78,7 +87,10 @@ export function PostStream({
   }
 
   async function removePost(post: FeedPost) {
-    if (!window.confirm("确定删除这条个人动态吗？其中的照片也会一并删除。")) return;
+    const prompt = post.circle
+      ? `确定删除这条圈子记录吗？圈内成员将无法再看到正文和其中的照片。`
+      : "确定删除这条个人动态吗？其中的照片也会一并删除。";
+    if (!window.confirm(prompt)) return;
     setPending(true);
     const response = await fetch(`/api/posts/${post.id}`, { method: "DELETE" });
     setPending(false);
@@ -113,12 +125,17 @@ export function PostStream({
               <header>
                 <div>
                   <Link href={`/profile/${post.author.id}`}>{post.author.name}</Link>
-                  <span>{displayTime(post.createdAt)} · {visibilityLabels[post.visibility]}</span>
+                  <span>
+                    {displayTime(post.createdAt)} · {post.circle ? (
+                      <Link href={`/circles/${post.circle.id}`}>{post.circle.name}</Link>
+                    ) : visibilityLabels[post.visibility]}
+                    {post.isHistorical ? " · 历史只读" : ""}
+                  </span>
                 </div>
-                {post.author.id === currentUserId ? (
+                {post.canEdit || post.canDelete ? (
                   <div className="entry-manage">
-                    <button onClick={() => beginEdit(post)} type="button">编辑</button>
-                    <button disabled={pending} onClick={() => removePost(post)} type="button">删除</button>
+                    {post.canEdit ? <button onClick={() => beginEdit(post)} type="button">编辑</button> : null}
+                    {post.canDelete ? <button disabled={pending} onClick={() => removePost(post)} type="button">删除</button> : null}
                   </div>
                 ) : null}
               </header>
@@ -141,7 +158,12 @@ export function PostStream({
                   ))}
                 </div>
               ) : null}
-              {edited ? <small className="edited-label">编辑于 {displayTime(post.updatedAt)}</small> : null}
+              {edited ? (
+                <small className="edited-label">
+                  {post.lastEditor ? `由 ${post.lastEditor.name} 最后编辑于 ` : "编辑于 "}
+                  {displayTime(post.updatedAt)}
+                </small>
+              ) : null}
             </div>
           </article>
         );
@@ -152,18 +174,34 @@ export function PostStream({
           <form className="edit-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={saveEdit}>
             <header><h2>编辑动态</h2><button onClick={() => setEditing(null)} type="button" aria-label="关闭">×</button></header>
             <textarea maxLength={5000} onChange={(event) => setEditBody(event.target.value)} value={editBody} />
-            <div className="visibility-control">
-              {(Object.entries(visibilityLabels) as Array<[PostVisibility, string]>).map(([value, label]) => (
-                <button
-                  aria-pressed={editVisibility === value}
-                  className={editVisibility === value ? "active" : ""}
-                  key={value}
-                  onClick={() => setEditVisibility(value)}
-                  type="button"
-                >{label.replace("可见", "")}</button>
-              ))}
-            </div>
-            {editVisibility === "selected" ? (
+            {!editing.circle ? (
+              <SegmentedControl
+                ariaLabel="可见范围"
+                className="visibility-control"
+                onValueChange={setEditVisibility}
+                options={editVisibilityOptions}
+                value={editVisibility}
+              />
+            ) : (
+              <div className="circle-management-edit">
+                <span>管理方式</span>
+                <SegmentedControl
+                  ariaLabel="圈子动态管理方式"
+                  className="segmented-control--compact"
+                  onValueChange={setEditManagementMode}
+                  options={[
+                    {
+                      value: "creator",
+                      label: "仅创建者管理",
+                      disabled: editing.managementMode === "circle",
+                    },
+                    { value: "circle", label: "圈内共同管理" },
+                  ]}
+                  value={editManagementMode}
+                />
+              </div>
+            )}
+            <AnimatedReveal show={!editing.circle && editVisibility === "selected"}>
               <fieldset className="friend-picker">
                 <legend>指定朋友</legend>
                 {friends.map((friend) => (
@@ -181,7 +219,7 @@ export function PostStream({
                   </label>
                 ))}
               </fieldset>
-            ) : null}
+            </AnimatedReveal>
             {error ? <p className="composer-error">{error}</p> : null}
             <button className="publish-button" disabled={pending} type="submit">
               {pending ? "正在保存" : "保存修改"}

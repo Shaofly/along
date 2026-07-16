@@ -5,13 +5,16 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { mediaAssets, postMedia, posts, postViewers } from "@/db/schema";
+import { circles, mediaAssets, postMedia, posts, postViewers } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import { getActiveCircleMembership } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
 
 const createPostSchema = z.object({
   body: z.string().trim().max(5000, "正文不能超过 5000 个字"),
   visibility: z.enum(["friends", "selected", "private"]),
+  circleId: z.string().nullable().optional(),
+  managementMode: z.enum(["creator", "circle"]).default("creator"),
   viewerIds: z.array(z.string()).max(100).default([]),
   mediaIds: z.array(z.string()).max(20, "每条动态最多 20 张图片").default([]),
 });
@@ -31,20 +34,33 @@ export async function POST(request: Request) {
   }
 
   const mediaIds = [...new Set(parsed.data.mediaIds)];
+  const circleId = parsed.data.circleId ?? null;
   const viewerIds = [...new Set(parsed.data.viewerIds)].filter(
     (id) => id !== session.user.id,
   );
   if (!parsed.data.body && mediaIds.length === 0) {
     return NextResponse.json({ error: "写点什么，或者选择一张图片。" }, { status: 400 });
   }
-  if (parsed.data.visibility === "selected" && viewerIds.length === 0) {
+  if (!circleId && parsed.data.visibility === "selected" && viewerIds.length === 0) {
     return NextResponse.json({ error: "请至少选择一位朋友。" }, { status: 400 });
   }
 
-  const friends = await getFriends(session.user.id);
-  const friendIds = new Set(friends.map((friend) => friend.id));
-  if (!viewerIds.every((id) => friendIds.has(id))) {
-    return NextResponse.json({ error: "指定可见者必须是你的朋友。" }, { status: 403 });
+  if (circleId) {
+    const [circle] = await db
+      .select({ status: circles.status })
+      .from(circles)
+      .where(eq(circles.id, circleId))
+      .limit(1);
+    const membership = await getActiveCircleMembership(session.user.id, circleId);
+    if (!circle || circle.status !== "active" || !membership) {
+      return NextResponse.json({ error: "当前不能向这个圈子发布内容。" }, { status: 403 });
+    }
+  } else {
+    const friends = await getFriends(session.user.id);
+    const friendIds = new Set(friends.map((friend) => friend.id));
+    if (!viewerIds.every((id) => friendIds.has(id))) {
+      return NextResponse.json({ error: "指定可见者必须是你的朋友。" }, { status: 403 });
+    }
   }
 
   if (mediaIds.length > 0) {
@@ -71,10 +87,12 @@ export async function POST(request: Request) {
     await transaction.insert(posts).values({
       id,
       authorId: session.user.id,
+      circleId,
       body: parsed.data.body,
-      visibility: parsed.data.visibility,
+      visibility: circleId ? "private" : parsed.data.visibility,
+      managementMode: circleId ? parsed.data.managementMode : "creator",
     });
-    if (parsed.data.visibility === "selected") {
+    if (!circleId && parsed.data.visibility === "selected") {
       await transaction.insert(postViewers).values(
         viewerIds.map((userId) => ({ postId: id, userId })),
       );
@@ -83,6 +101,12 @@ export async function POST(request: Request) {
       await transaction.insert(postMedia).values(
         mediaIds.map((mediaId, position) => ({ postId: id, mediaId, position })),
       );
+    }
+    if (circleId) {
+      await transaction
+        .update(circles)
+        .set({ updatedAt: new Date() })
+        .where(eq(circles.id, circleId));
     }
   });
 

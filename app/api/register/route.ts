@@ -9,7 +9,8 @@ import {
 } from "@/lib/invitations";
 
 const registrationSchema = z.object({
-  name: z.string().trim().min(1, "请输入昵称").max(40, "昵称不能超过 40 个字"),
+  realName: z.string().trim().min(1, "请输入真实姓名").max(40, "真实姓名不能超过 40 个字"),
+  nickname: z.string().trim().max(40, "昵称不能超过 40 个字").optional().transform((value) => value || null),
   email: z.email("请输入有效邮箱").transform((value) => value.toLowerCase()),
   password: z.string().min(10, "密码至少需要 10 位").max(128),
   inviteCode: z.string().trim().min(6, "请输入有效邀请码").max(64),
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { name, email, password, inviteCode } = parsed.data;
+  const { realName, nickname, email, password, inviteCode } = parsed.data;
   const validated = await validateInvitation(inviteCode, email);
 
   if (!validated) {
@@ -37,7 +38,13 @@ export async function POST(request: Request) {
 
   try {
     const result = await auth.api.signUpEmail({
-      body: { name, email, password },
+      body: {
+        name: nickname ?? realName,
+        realName,
+        nickname: nickname ?? undefined,
+        email,
+        password,
+      },
       headers: new Headers({
         "x-registration-gate": process.env.REGISTRATION_GATE_SECRET ?? "",
       }),

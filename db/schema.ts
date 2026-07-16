@@ -495,6 +495,58 @@ export const posts = pgTable(
   ],
 );
 
+export const drafts = pgTable(
+  "drafts",
+  {
+    id: text("id").primaryKey(),
+    authorId: text("author_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    circleId: text("circle_id").references(() => circles.id),
+    body: text("body").default("").notNull(),
+    visibility: postVisibility("visibility").default("friends").notNull(),
+    managementMode: circleManagementMode("management_mode")
+      .default("creator")
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("drafts_author_updated_idx").on(table.authorId, table.updatedAt),
+    index("drafts_circle_idx").on(table.circleId),
+    check("drafts_body_length", sql`char_length(${table.body}) <= 5000`),
+    check("drafts_timestamps_ordered", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check(
+      "drafts_personal_management_mode",
+      sql`${table.circleId} is not null or ${table.managementMode} = 'creator'`,
+    ),
+    check(
+      "drafts_circle_visibility",
+      sql`${table.circleId} is null or ${table.visibility} = 'private'`,
+    ),
+  ],
+);
+
+export const draftViewers = pgTable(
+  "draft_viewers",
+  {
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.draftId, table.userId] }),
+    index("draft_viewers_user_idx").on(table.userId),
+  ],
+);
+
 export const circlePostSnapshots = pgTable(
   "circle_post_snapshots",
   {
@@ -574,5 +626,24 @@ export const postMedia = pgTable(
     uniqueIndex("post_media_position_idx").on(table.postId, table.position),
     uniqueIndex("post_media_media_idx").on(table.mediaId),
     check("post_media_position_range", sql`${table.position} between 0 and 19`),
+  ],
+);
+
+export const draftMedia = pgTable(
+  "draft_media",
+  {
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.draftId, table.mediaId] }),
+    uniqueIndex("draft_media_position_idx").on(table.draftId, table.position),
+    uniqueIndex("draft_media_media_idx").on(table.mediaId),
+    check("draft_media_position_range", sql`${table.position} between 0 and 19`),
   ],
 );

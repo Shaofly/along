@@ -89,7 +89,7 @@ export function PostStream({
   async function removePost(post: FeedPost) {
     const prompt = post.circle
       ? `确定删除这条圈子记录吗？圈内成员将无法再看到正文和其中的照片。`
-      : "确定删除这条个人动态吗？其中的照片也会一并删除。";
+      : "确定删除这条个人动态吗？其中的照片也会一并删除！";
     if (!window.confirm(prompt)) return;
     setPending(true);
     const response = await fetch(`/api/posts/${post.id}`, { method: "DELETE" });
@@ -106,7 +106,7 @@ export function PostStream({
     return (
       <div className="feed-empty">
         <strong>这里还很安静</strong>
-        <p>第一条真实动态发布后，会从这里开始慢慢积累。</p>
+        <p>第一条动态发布后，会在这里显示。</p>
       </div>
     );
   }

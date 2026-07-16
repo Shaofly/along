@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db";
-import { mediaAssets, postMedia } from "@/db/schema";
+import { draftMedia, mediaAssets, postMedia } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { canViewPost } from "@/lib/content";
 import { deleteStoredFile, readStoredFile } from "@/lib/storage";
@@ -81,6 +81,14 @@ export async function DELETE(
     .limit(1);
   if (link) {
     return NextResponse.json({ error: "已发布的图片不能单独移除。" }, { status: 409 });
+  }
+  const [draftLink] = await db
+    .select({ draftId: draftMedia.draftId })
+    .from(draftMedia)
+    .where(eq(draftMedia.mediaId, id))
+    .limit(1);
+  if (draftLink) {
+    return NextResponse.json({ error: "草稿中的图片需要随草稿更新。" }, { status: 409 });
   }
 
   await db.delete(mediaAssets).where(eq(mediaAssets.id, id));

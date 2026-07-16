@@ -5,7 +5,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { circles, mediaAssets, postMedia, posts, postViewers } from "@/db/schema";
+import {
+  circles,
+  draftMedia,
+  drafts,
+  mediaAssets,
+  postMedia,
+  posts,
+  postViewers,
+} from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { getActiveCircleMembership } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
@@ -17,6 +25,7 @@ const createPostSchema = z.object({
   managementMode: z.enum(["creator", "circle"]).default("creator"),
   viewerIds: z.array(z.string()).max(100).default([]),
   mediaIds: z.array(z.string()).max(20, "每条动态最多 20 张图片").default([]),
+  draftId: z.string().nullable().optional(),
 });
 
 export async function POST(request: Request) {
@@ -35,6 +44,7 @@ export async function POST(request: Request) {
 
   const mediaIds = [...new Set(parsed.data.mediaIds)];
   const circleId = parsed.data.circleId ?? null;
+  const draftId = parsed.data.draftId ?? null;
   const viewerIds = [...new Set(parsed.data.viewerIds)].filter(
     (id) => id !== session.user.id,
   );
@@ -82,6 +92,23 @@ export async function POST(request: Request) {
     }
   }
 
+  if (draftId) {
+    const [draft] = await db
+      .select({ id: drafts.id })
+      .from(drafts)
+      .where(and(eq(drafts.id, draftId), eq(drafts.authorId, session.user.id)))
+      .limit(1);
+    if (!draft) return NextResponse.json({ error: "草稿不存在。" }, { status: 404 });
+    const linkedMedia = await db
+      .select({ id: draftMedia.mediaId })
+      .from(draftMedia)
+      .where(eq(draftMedia.draftId, draftId));
+    const linkedIds = linkedMedia.map((media) => media.id);
+    if (linkedIds.length !== mediaIds.length || linkedIds.some((id) => !mediaIds.includes(id))) {
+      return NextResponse.json({ error: "草稿照片尚未同步完成。" }, { status: 409 });
+    }
+  }
+
   const id = randomUUID();
   await db.transaction(async (transaction) => {
     await transaction.insert(posts).values({
@@ -107,6 +134,9 @@ export async function POST(request: Request) {
         .update(circles)
         .set({ updatedAt: new Date() })
         .where(eq(circles.id, circleId));
+    }
+    if (draftId) {
+      await transaction.delete(drafts).where(eq(drafts.id, draftId));
     }
   });
 

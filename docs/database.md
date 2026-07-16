@@ -9,8 +9,8 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 认证 | `user`、`session`、`account`、`verification` |
 | 邀请与关系 | `invitations`、`invitation_sponsors`、`friendships`、`friend_remarks` |
 | 小圈子 | `circles`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
-| 内容 | `posts`、`post_viewers`、`circle_post_snapshots` |
-| 媒体 | `media_assets`、`post_media` |
+| 内容 | `posts`、`post_viewers`、`circle_post_snapshots`、`drafts`、`draft_viewers` |
+| 媒体 | `media_assets`、`post_media`、`draft_media` |
 
 二进制图片不进入 PostgreSQL。数据库只保存随机存储键、归属、类型、大小和内容关联。
 
@@ -41,6 +41,8 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 成员退出时间不能早于加入时间，同一用户在一个圈子里最多只有一个活跃周期。
 - 同一圈子和候选人最多只有一项待处理加入提案，提案状态与解决时间一致。
 - 个人内容不能使用圈内共同管理，圈子内容在通用可见范围字段中必须保持 private，由圈子成员周期单独授权。
+- 草稿沿用正式内容的可见范围与管理方式约束，但始终只允许作者通过草稿接口读取；指定查看者和圈子仅用于恢复发布设置，不会让其他人提前看到草稿。
+- 每个媒体资源最多关联一条草稿，草稿内位置保持 0 至 19 唯一；草稿被放弃时，未进入正式内容的私有媒体一并清理，发布成功时只删除草稿关系而保留正式媒体。
 - 正文长度、媒体字节数和单条内容的媒体排序位置有数据库级边界。
 
 跨表规则，例如“空正文必须至少有一张图片”“selected 动态必须至少有一位查看者”，无法用普通 CHECK 可靠表达，继续由事务内的服务端业务层验证。

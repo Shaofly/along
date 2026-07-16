@@ -1,5 +1,20 @@
 export type PostVisibility = "friends" | "selected" | "private";
 
+export type HomeDraft = {
+  id: string;
+  body: string;
+  visibility: PostVisibility;
+  circleId: string | null;
+  managementMode: "creator" | "circle";
+  viewerIds: string[];
+  media: Array<{
+    id: string;
+    originalName: string;
+    mimeType: string;
+  }>;
+  updatedAt: string;
+};
+
 export type FeedPost = {
   id: string;
   body: string;

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { getCircleDashboard } from "@/lib/circles";
 import { getVisiblePosts } from "@/lib/content";
+import { getLatestDraft } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
@@ -20,12 +21,13 @@ export default async function HomePage() {
     redirect("/");
   }
 
-  const [currentUser, posts, ownPosts, friendRows, circleDashboard] = await Promise.all([
+  const [currentUser, posts, ownPosts, friendRows, circleDashboard, initialDraft] = await Promise.all([
     getShellUser(session.user.id),
     getVisiblePosts(session.user.id, { limit: 5 }),
     getVisiblePosts(session.user.id, { authorId: session.user.id, limit: 20 }),
     getFriends(session.user.id),
     getCircleDashboard(session.user.id),
+    getLatestDraft(session.user.id),
   ]);
   if (!currentUser) redirect("/");
 
@@ -46,6 +48,7 @@ export default async function HomePage() {
         remark: friend.remark,
         image: friend.image,
       }))}
+      initialDraft={initialDraft}
       key={boardMedia.map((media) => media.id).join(":") || "empty-board"}
       posts={posts}
     />

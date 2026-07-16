@@ -1,260 +1,409 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+/* eslint-disable @next/next/no-img-element -- Private media and local previews require browser-side URLs. */
 
+import Link from "next/link";
+import {
+  type CSSProperties,
+  FormEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useRouter } from "next/navigation";
+
+import { PostStream } from "@/app/components/PostStream";
 import { authClient } from "@/lib/auth-client";
+import type {
+  FeedPost,
+  FriendSummary,
+  PostVisibility,
+} from "@/lib/content-types";
 
-const friends = [
-  {
-    name: "小林",
-    role: "夜聊搭子",
-    note: "总能把普通一天讲成连续剧，也会认真记住每个小细节。",
-    hue: "mint",
-  },
-  {
-    name: "阿澈",
-    role: "行动派",
-    note: "负责把“改天吧”变成“现在就出门”，照片里永远笑得最亮。",
-    hue: "sun",
-  },
-  {
-    name: "眠眠",
-    role: "情绪翻译官",
-    note: "不急着给答案，只是安静坐在旁边，就已经很可靠。",
-    hue: "rose",
-  },
+type CurrentUser = { id: string; name: string };
+
+const warmNotes = [
+  "不用把今天写得完整，留下一点就很好。",
+  "普通的一天，也值得被朋友记得。",
+  "有些照片现在平常，以后会很珍贵。",
+  "慢一点，这里没有需要追赶的更新。",
 ];
 
-const memories = [
-  {
-    time: "三月傍晚",
-    title: "便利店门口的热牛奶",
-    text: "那天风很大，我们站在路灯下面说了很久没头没尾的话。",
-    tag: "日常",
-  },
-  {
-    time: "夏天周末",
-    title: "把歌单放到很大声",
-    text: "没有目的地，只是沿着河边走。后来每次听到那首歌都会想起这天。",
-    tag: "出走",
-  },
-  {
-    time: "生日凌晨",
-    title: "零点的第一句祝福",
-    text: "消息同时弹出来的时候，突然觉得自己被很多温柔接住了。",
-    tag: "纪念",
-  },
-];
+const visibilityOptions = [
+  ["friends", "朋友"],
+  ["selected", "指定朋友"],
+  ["private", "仅自己"],
+] as const;
 
-const starterPosts = [
-  {
-    author: "我",
-    mood: "被朋友惦记着的一天",
-    body: "今天想做一个只给熟人看的地方，慢慢放照片、碎碎念、约饭计划和那些不想被算法打扰的小事。",
-    detail: "刚刚",
-  },
-  {
-    author: "小林",
-    mood: "收藏一段晚风",
-    body: "如果页面里可以有一个角落，专门放大家的“今天还不错”，那应该会很可爱。",
-    detail: "18:42",
-  },
-];
+export function SocialHome({
+  currentUser,
+  friends,
+  posts,
+  boardMedia,
+}: {
+  currentUser: CurrentUser;
+  friends: FriendSummary[];
+  posts: FeedPost[];
+  boardMedia: FeedPost["media"];
+}) {
+  const router = useRouter();
+  const [body, setBody] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [visibility, setVisibility] = useState<PostVisibility>("friends");
+  const [visibilitySliderPosition, setVisibilitySliderPosition] = useState<number | null>(null);
+  const [viewerIds, setViewerIds] = useState<string[]>([]);
+  const boardItemIds = useMemo(
+    () => [0, 1, 2].map((index) => boardMedia[index]?.id ?? `empty-${index}`),
+    [boardMedia],
+  );
+  const defaultBoardOrder = useMemo(
+    () => [boardItemIds[0], boardItemIds[2], "note", boardItemIds[1]],
+    [boardItemIds],
+  );
+  const [boardOrder, setBoardOrder] = useState(defaultBoardOrder);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const previews = useMemo(
+    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [files],
+  );
+  const note = warmNotes[new Date().getDate() % warmNotes.length];
 
-export function SocialHome({ displayName }: { displayName: string }) {
-  const [activeTab, setActiveTab] = useState("全部");
-  const [posts, setPosts] = useState(starterPosts);
-  const [draft, setDraft] = useState("");
+  useEffect(
+    () => () => previews.forEach((preview) => URL.revokeObjectURL(preview.url)),
+    [previews],
+  );
 
-  const filteredMemories = useMemo(() => {
-    if (activeTab === "全部") {
-      return memories;
-    }
-
-    return memories.filter((memory) => memory.tag === activeTab);
-  }, [activeTab]);
-
-  function publishPost(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const cleanDraft = draft.trim();
-
-    if (!cleanDraft) {
+  useEffect(() => {
+    if (boardOrder.every((item, index) => item === defaultBoardOrder[index])) {
       return;
     }
 
-    setPosts([
-      {
-        author: "我",
-        mood: "新鲜心情",
-        body: cleanDraft,
-        detail: "刚刚发布",
-      },
-      ...posts,
+    const resetTimer = window.setTimeout(
+      () => setBoardOrder([...defaultBoardOrder]),
+      8000,
+    );
+    return () => window.clearTimeout(resetTimer);
+  }, [boardOrder, defaultBoardOrder]);
+
+  function bringBoardItemForward(itemId: string) {
+    setBoardOrder((current) => [
+      ...current.filter((currentId) => currentId !== itemId),
+      itemId,
     ]);
-    setDraft("");
+  }
+
+  function chooseVisibility(nextVisibility: PostVisibility) {
+    setVisibility(nextVisibility);
+    if (nextVisibility !== "selected") setViewerIds([]);
+  }
+
+  function getVisibilityPosition(event: ReactPointerEvent<HTMLDivElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return Math.max(
+      0,
+      Math.min(2, ((event.clientX - bounds.left) / bounds.width) * 3 - 0.5),
+    );
+  }
+
+  function beginVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setVisibilitySliderPosition(getVisibilityPosition(event));
+  }
+
+  function moveVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    setVisibilitySliderPosition(getVisibilityPosition(event));
+  }
+
+  function finishVisibilityDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const nextIndex = Math.round(getVisibilityPosition(event));
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setVisibilitySliderPosition(null);
+    chooseVisibility(visibilityOptions[nextIndex][0]);
+  }
+
+  function chooseFiles(selected: FileList | null) {
+    if (!selected) return;
+    const next = Array.from(selected).slice(0, 20);
+    setFiles(next);
+    setError(selected.length > 20 ? "每条动态最多选择 20 张图片。" : "");
+  }
+
+  async function publish(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!body.trim() && files.length === 0) return;
+    if (visibility === "selected" && viewerIds.length === 0) {
+      setError("请至少选择一位朋友。条目只会给你选中的人看见。");
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    const uploadedIds: string[] = [];
+    try {
+      for (const file of files) {
+        const formData = new FormData();
+        formData.set("file", file);
+        const uploadResponse = await fetch("/api/media", {
+          method: "POST",
+          body: formData,
+        });
+        const uploadResult = (await uploadResponse.json()) as {
+          id?: string;
+          error?: string;
+        };
+        if (!uploadResponse.ok || !uploadResult.id) {
+          throw new Error(uploadResult.error ?? "图片上传失败。");
+        }
+        uploadedIds.push(uploadResult.id);
+      }
+
+      const response = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          body,
+          visibility,
+          viewerIds: visibility === "selected" ? viewerIds : [],
+          mediaIds: uploadedIds,
+        }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "发布失败。");
+
+      setBody("");
+      setFiles([]);
+      setViewerIds([]);
+      setVisibility("friends");
+      router.refresh();
+    } catch (publishError) {
+      await Promise.all(
+        uploadedIds.map((id) => fetch(`/api/media/${id}`, { method: "DELETE" })),
+      );
+      setError(publishError instanceof Error ? publishError.message : "发布失败。");
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[var(--cream)] text-[var(--ink)]">
-      <section className="hero-shell">
-        <nav className="topbar" aria-label="主要导航">
-          <a className="brand" href="#home" aria-label="回到首页">
-            <span className="brand-mark" aria-hidden="true">
-              心
-            </span>
-            <span>小小朋友圈</span>
-          </a>
-          <div className="nav-links">
-            <a href="#feed">动态</a>
-            <a href="/invites">邀请</a>
-            <a href="#memories">回忆</a>
-            <button
-              type="button"
-              className="account-action"
-              onClick={async () => {
-                await authClient.signOut();
-                window.location.href = "/";
-              }}
-              title={`${displayName}，退出登录`}
-            >
-              {displayName.slice(0, 1)}
-            </button>
-          </div>
+    <main className="app-page">
+      <header className="app-header">
+        <Link className="brand" href="/home">
+          <span className="brand-mark" aria-hidden="true">圆</span>
+          <span>圆个圈 <small>Along</small></span>
+        </Link>
+        <nav className="app-nav" aria-label="主要导航">
+          <Link className="active" href="/home">首页</Link>
+          <Link href="/invites">朋友</Link>
+          <details className="account-menu">
+            <summary aria-label="打开个人菜单">{currentUser.name.slice(0, 1)}</summary>
+            <div>
+              <Link href={`/profile/${currentUser.id}`}>我的空间</Link>
+              <Link href="/invites">共同邀请</Link>
+              <button
+                type="button"
+                onClick={async () => {
+                  await authClient.signOut();
+                  window.location.href = "/";
+                }}
+              >
+                退出登录
+              </button>
+            </div>
+          </details>
         </nav>
+      </header>
 
-        <div className="hero-grid" id="home">
-          <div className="hero-copy">
-            <p className="eyebrow">只给自己和朋友的小站</p>
-            <h1>把我们闪闪发亮的普通日子，慢慢存起来。</h1>
-            <p className="hero-text">
-              一个温柔、私密、像手账一样的社交网页：写今日心情，贴朋友的近况，
-              收藏一起走过的时间，也给未来的约定留一盏小灯。
-            </p>
-            <div className="hero-actions" aria-label="快捷入口">
-              <a className="primary-action" href="#composer">
-                写一条近况
-              </a>
-              <a className="secondary-action" href="#memories">
-                翻翻回忆
-              </a>
-            </div>
-          </div>
-
-          <aside className="hero-board" aria-label="今日温柔看板">
-            <div className="photo-stack" aria-hidden="true">
-              <div className="photo-card photo-card-a">
-                <span>晚风</span>
-              </div>
-              <div className="photo-card photo-card-b">
-                <span>合照</span>
-              </div>
-              <div className="photo-card photo-card-c">
-                <span>奶茶</span>
-              </div>
-            </div>
-            <div className="today-note">
-              <span>今日小纸条</span>
-              <strong>记得约一次没有目的地的散步。</strong>
-            </div>
-          </aside>
+      <section className="home-intro">
+        <div>
+          <p className="eyebrow">欢迎回来，{currentUser.name}</p>
+          <h1>最近有什么，想留给朋友看看？</h1>
+          <p>{note}</p>
         </div>
+        <aside className="memory-board" aria-label="最近留下的照片">
+          {[0, 1, 2].map((index) => {
+            const media = boardMedia[index];
+            const itemId = media?.id ?? `empty-${index}`;
+            return (
+              <button
+                aria-label={media ? `把照片 ${media.originalName} 放到最上面` : `把${["晚风", "一起", "最近"][index]}卡片放到最上面`}
+                aria-pressed={boardOrder.at(-1) === itemId}
+                className={`board-photo board-photo-${index + 1}${boardOrder.at(-1) === itemId ? " is-active" : ""}`}
+                key={itemId}
+                onClick={() => bringBoardItemForward(itemId)}
+                style={{ zIndex: boardOrder.indexOf(itemId) + 1 }}
+                type="button"
+              >
+                {media ? (
+                  <img alt={media.originalName} src={`/api/media/${media.id}`} />
+                ) : (
+                  <span>{["晚风", "一起", "最近"][index]}</span>
+                )}
+              </button>
+            );
+          })}
+          <button
+            aria-label="把暖心便签放到最上面"
+            aria-pressed={boardOrder.at(-1) === "note"}
+            className={`board-note${boardOrder.at(-1) === "note" ? " is-active" : ""}`}
+            onClick={() => bringBoardItemForward("note")}
+            style={{ zIndex: boardOrder.indexOf("note") + 1 }}
+            type="button"
+          >
+            {note}
+          </button>
+        </aside>
       </section>
 
-      <section className="content-band feed-layout" id="feed">
-        <div className="section-heading">
-          <p>动态</p>
-          <h2>朋友们最近在想什么</h2>
-        </div>
-
-        <form className="composer" id="composer" onSubmit={publishPost}>
-          <label htmlFor="post-draft">写给朋友看的今日片段</label>
-          <div className="composer-row">
-            <input
-              id="post-draft"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="比如：今天路过花店，突然很想大家。"
-              maxLength={80}
+      <div className="home-layout">
+        <div className="home-main">
+          <form className="real-composer" onSubmit={publish}>
+            <div className="composer-context">
+              <span>个人动态</span>
+              <small>发布后显示在你的个人空间</small>
+            </div>
+            <label className="sr-only" htmlFor="post-body">动态正文</label>
+            <textarea
+              id="post-body"
+              maxLength={5000}
+              onChange={(event) => setBody(event.target.value)}
+              placeholder="想起什么，就从这里轻轻写下吧……"
+              value={body}
             />
-            <button type="submit">发布</button>
-          </div>
-        </form>
 
-        <div className="feed-list" aria-live="polite">
-          {posts.map((post) => (
-            <article className="post-card" key={`${post.author}-${post.body}`}>
-              <div className="post-avatar" aria-hidden="true">
-                {post.author.slice(0, 1)}
+            {previews.length > 0 ? (
+              <div className="upload-previews">
+                {previews.map((preview, index) => (
+                  <figure key={`${preview.file.name}-${preview.file.lastModified}-${index}`}>
+                    <img alt="待发布预览" src={preview.url} />
+                    <button
+                      aria-label={`移除图片 ${preview.file.name}`}
+                      className="remove-preview"
+                      onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                      type="button"
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </figure>
+                ))}
               </div>
-              <div>
-                <div className="post-meta">
-                  <strong>{post.author}</strong>
-                  <span>{post.detail}</span>
-                </div>
-                <h3>{post.mood}</h3>
-                <p>{post.body}</p>
-                <div className="post-actions" aria-label="动态互动">
-                  <button type="button">喜欢</button>
-                  <button type="button">抱抱</button>
-                  <button type="button">下次一起</button>
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+            ) : null}
 
-      <section className="content-band friend-grid" id="friends">
-        <div className="section-heading">
-          <p>朋友</p>
-          <h2>这些人让日子有了回声</h2>
-        </div>
-
-        <div className="cards-grid">
-          {friends.map((friend) => (
-            <article className={`friend-card ${friend.hue}`} key={friend.name}>
-              <div className="friend-avatar" aria-hidden="true">
-                {friend.name.slice(0, 1)}
-              </div>
-              <span>{friend.role}</span>
-              <h3>{friend.name}</h3>
-              <p>{friend.note}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="content-band memories" id="memories">
-        <div className="section-heading">
-          <p>回忆</p>
-          <h2>把小事放进时间盒子</h2>
-        </div>
-
-        <div className="memory-tabs" role="tablist" aria-label="回忆分类">
-          {["全部", "日常", "出走", "纪念"].map((tab) => (
-            <button
-              className={activeTab === tab ? "active" : ""}
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
+            <div
+              aria-label="可见范围"
+              className={`visibility-control${visibilitySliderPosition === null ? "" : " dragging"}`}
+              onPointerCancel={() => setVisibilitySliderPosition(null)}
+              onPointerDown={beginVisibilityDrag}
+              onPointerMove={moveVisibilityDrag}
+              onPointerUp={finishVisibilityDrag}
+              role="group"
+              style={{
+                "--visibility-position":
+                  visibilitySliderPosition ??
+                  visibilityOptions.findIndex(([value]) => value === visibility),
+              } as CSSProperties}
             >
-              {tab}
-            </button>
-          ))}
+              {visibilityOptions.map(([value, label]) => (
+                <button
+                  aria-pressed={visibility === value}
+                  className={visibility === value ? "active" : ""}
+                  key={value}
+                  onClick={(event) => {
+                    if (event.detail === 0) chooseVisibility(value);
+                  }}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {visibility === "selected" ? (
+              <fieldset className="friend-picker">
+                <legend>选择能看到这条动态的朋友</legend>
+                {friends.map((friend) => (
+                  <label key={friend.id}>
+                    <input
+                      checked={viewerIds.includes(friend.id)}
+                      onChange={(event) =>
+                        setViewerIds((current) =>
+                          event.target.checked
+                            ? [...current, friend.id]
+                            : current.filter((id) => id !== friend.id),
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    {friend.name}
+                  </label>
+                ))}
+              </fieldset>
+            ) : null}
+
+            {error ? <p className="composer-error">{error}</p> : null}
+            <div className="composer-tools">
+              <label className="photo-input">
+                添加照片
+                <input
+                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                  multiple
+                  onChange={(event) => chooseFiles(event.target.files)}
+                  type="file"
+                />
+              </label>
+              <span>{files.length > 0 ? `${files.length} / 20 张` : "JPG、PNG、WebP 或 HEIC"}</span>
+              <button
+                className="publish-button"
+                disabled={pending || (!body.trim() && files.length === 0)}
+                type="submit"
+              >
+                {pending ? "正在发布" : "发布"}
+              </button>
+            </div>
+          </form>
+
+          <section className="latest-section">
+            <div className="section-line-heading">
+              <div>
+                <p className="eyebrow">最近动态</p>
+                <h2>朋友们新留下的片段</h2>
+              </div>
+              <Link href="/feed">查看全部</Link>
+            </div>
+            <PostStream
+              currentUserId={currentUser.id}
+              friends={friends}
+              posts={posts}
+            />
+          </section>
         </div>
 
-        <div className="timeline">
-          {filteredMemories.map((memory) => (
-            <article className="memory-item" key={memory.title}>
-              <span>{memory.time}</span>
-              <h3>{memory.title}</h3>
-              <p>{memory.text}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+        <aside className="home-aside">
+          <section>
+            <div className="aside-heading">
+              <h2>朋友</h2>
+              <Link href="/invites">邀请</Link>
+            </div>
+            <div className="friend-list">
+              {friends.length > 0 ? friends.map((friend) => (
+                <Link href={`/profile/${friend.id}`} key={friend.id}>
+                  <span>{friend.name.slice(0, 1)}</span>
+                  <strong>{friend.name}</strong>
+                </Link>
+              )) : <p>还没有朋友，先完成一次共同邀请。</p>}
+            </div>
+          </section>
+          <section className="future-links">
+            <span>慢慢长出来的地方</span>
+            <p>圈子、足迹和胶囊会在后续版本依次来到这里。</p>
+          </section>
+        </aside>
+      </div>
     </main>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "along",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -11,6 +11,7 @@
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "node --env-file-if-exists=.env.local .next/standalone/server.js",
     "test": "pnpm run lint && pnpm run typecheck",
+    "test:smoke": "node --env-file=.env.local scripts/smoke-test.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
@@ -24,6 +25,7 @@
     "pg": "^8.22.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
+    "sharp": "0.34.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

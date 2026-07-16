@@ -12,12 +12,19 @@ import {
 
 export const userRole = pgEnum("user_role", ["admin", "member"]);
 
+export const postVisibility = pgEnum("post_visibility", [
+  "friends",
+  "selected",
+  "private",
+]);
+
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
+  bio: text("bio").default("").notNull(),
   role: userRole("role").default("member").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -180,5 +187,79 @@ export const friendships = pgTable(
     uniqueIndex("friendships_pair_idx").on(table.userOneId, table.userTwoId),
     index("friendships_user_one_idx").on(table.userOneId),
     index("friendships_user_two_idx").on(table.userTwoId),
+  ],
+);
+
+export const posts = pgTable(
+  "posts",
+  {
+    id: text("id").primaryKey(),
+    authorId: text("author_id")
+      .notNull()
+      .references(() => user.id),
+    body: text("body").default("").notNull(),
+    visibility: postVisibility("visibility").default("friends").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("posts_author_created_idx").on(table.authorId, table.createdAt),
+    index("posts_created_idx").on(table.createdAt),
+  ],
+);
+
+export const postViewers = pgTable(
+  "post_viewers",
+  {
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_viewers_user_idx").on(table.userId),
+  ],
+);
+
+export const mediaAssets = pgTable(
+  "media_assets",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id),
+    storageKey: text("storage_key").notNull().unique(),
+    originalName: text("original_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("media_assets_owner_idx").on(table.ownerId)],
+);
+
+export const postMedia = pgTable(
+  "post_media",
+  {
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.mediaId] }),
+    uniqueIndex("post_media_position_idx").on(table.postId, table.position),
+    uniqueIndex("post_media_media_idx").on(table.mediaId),
   ],
 );

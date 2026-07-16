@@ -28,7 +28,11 @@ export function AuthScreen() {
 
     setPending(false);
     if (signInError) {
-      setError("邮箱或密码不正确。");
+      setError(
+        signInError.status === 403
+          ? "当前访问地址尚未被服务器信任，请检查隧道地址配置。"
+          : "邮箱或密码不正确。",
+      );
       return;
     }
 
@@ -67,9 +71,9 @@ export function AuthScreen() {
   return (
     <main className="auth-shell">
       <section className="auth-story" aria-labelledby="welcome-title">
-        <Link className="brand auth-brand" href="/" aria-label="小小朋友圈首页">
-          <span className="brand-mark" aria-hidden="true">心</span>
-          <span>小小朋友圈</span>
+        <Link className="brand auth-brand" href="/" aria-label="圆个圈首页">
+          <span className="brand-mark" aria-hidden="true">圆</span>
+          <span>圆个圈 <small>Along</small></span>
         </Link>
         <div className="auth-copy">
           <p className="eyebrow">只让熟人进来的共同生活档案</p>

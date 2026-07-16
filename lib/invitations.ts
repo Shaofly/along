@@ -179,7 +179,7 @@ export async function getFriends(userId: string) {
   }
 
   return db
-    .select({ id: user.id, name: user.name, email: user.email })
+    .select({ id: user.id, name: user.name, email: user.email, image: user.image })
     .from(user)
     .where(inArray(user.id, friendIds));
 }

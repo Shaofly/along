@@ -81,8 +81,8 @@ export default async function InvitesPage() {
     <main className="invites-shell">
       <header className="invites-topbar">
         <a className="brand" href="/home">
-          <span className="brand-mark" aria-hidden="true">心</span>
-          <span>小小朋友圈</span>
+          <span className="brand-mark" aria-hidden="true">圆</span>
+          <span>圆个圈 <small>Along</small></span>
         </a>
         <a className="secondary-action" href="/home">返回主页</a>
       </header>

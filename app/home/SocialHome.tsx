@@ -18,6 +18,11 @@ import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
 import { DissolveTextarea } from "@/app/components/DissolveField";
+import {
+  appendUniqueFiles,
+  uploadMediaFiles,
+  type UploadProgress,
+} from "@/app/components/media-upload";
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import { SoftReveal } from "@/app/components/SoftReveal";
 import { TextStateSwap } from "@/app/components/TextStateSwap";
@@ -88,6 +93,7 @@ export function SocialHome({
   );
   const [viewerIds, setViewerIds] = useState<string[]>(initialDraft?.viewerIds ?? []);
   const [pending, setPending] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [draftAction, setDraftAction] = useState<"save" | "discard" | null>(null);
   const [error, setError] = useState("");
   const [publisherOpen, setPublisherOpen] = useState(false);
@@ -185,10 +191,9 @@ export function SocialHome({
 
   function chooseFiles(selected: FileList | null) {
     if (!selected) return;
-    const available = Math.max(0, 20 - savedMedia.length);
-    const next = Array.from(selected).slice(0, available);
-    setFiles(next);
-    setError(selected.length > available ? "每条动态最多选择 20 张图片。" : "");
+    const result = appendUniqueFiles(files, selected, Math.max(0, 20 - savedMedia.length));
+    setFiles(result.files);
+    setError(result.omitted > 0 ? "已忽略重复图片，或已达到每条动态 20 张的上限。" : "");
   }
 
   function openPublisher() {
@@ -227,30 +232,9 @@ export function SocialHome({
   }
 
   async function uploadFiles(selectedFiles: File[]) {
-    const uploaded: SavedMedia[] = [];
-    try {
-      for (const file of selectedFiles) {
-        const formData = new FormData();
-        formData.set("file", file);
-        const response = await fetch("/api/media", { method: "POST", body: formData });
-        const result = (await response.json()) as {
-          id?: string;
-          name?: string;
-          mimeType?: string;
-          error?: string;
-        };
-        if (!response.ok || !result.id) throw new Error(result.error ?? "图片上传失败。");
-        uploaded.push({
-          id: result.id,
-          originalName: result.name ?? file.name,
-          mimeType: result.mimeType ?? file.type,
-        });
-      }
-      return uploaded;
-    } catch (uploadError) {
-      await Promise.all(uploaded.map((media) => fetch(`/api/media/${media.id}`, { method: "DELETE" })));
-      throw uploadError;
-    }
+    if (selectedFiles.length === 0) return [];
+    setUploadProgress({ percent: 0, phase: "uploading" });
+    return uploadMediaFiles(selectedFiles, setUploadProgress);
   }
 
   function draftPayload(mediaIds: string[], id = draftId) {
@@ -295,6 +279,7 @@ export function SocialHome({
       setError(saveError instanceof Error ? saveError.message : "草稿保存失败。");
       setDraftDialogOpen(false);
     } finally {
+      setUploadProgress(null);
       setPending(false);
       setDraftAction(null);
     }
@@ -330,6 +315,7 @@ export function SocialHome({
       setError(discardError instanceof Error ? discardError.message : "草稿删除失败。");
       setDraftDialogOpen(false);
     } finally {
+      setUploadProgress(null);
       setPending(false);
       setDraftAction(null);
     }
@@ -355,6 +341,7 @@ export function SocialHome({
     try {
       uploaded = await uploadFiles(files);
       const nextMedia = [...savedMedia, ...uploaded];
+      setUploadProgress(null);
       if (draftId) {
         syncedDraftId = await syncDraft(nextMedia);
         uploadsAttachedToDraft = true;
@@ -381,6 +368,7 @@ export function SocialHome({
       }
       setError(publishError instanceof Error ? publishError.message : "发布失败。");
     } finally {
+      setUploadProgress(null);
       setPending(false);
     }
   }
@@ -599,7 +587,10 @@ export function SocialHome({
                   <input
                     accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
                     multiple
-                    onChange={(event) => chooseFiles(event.target.files)}
+                    onChange={(event) => {
+                      chooseFiles(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
                     type="file"
                   />
                 </label>
@@ -607,7 +598,14 @@ export function SocialHome({
                 <div className="composer-submit-actions">
                   <button className="composer-close-action" disabled={pending} onClick={requestClosePublisher} type="button">收起</button>
                   <button className="publish-button" disabled={pending || !hasDraftContent} type="submit">
-                    <TextStateSwap labels={["发布", "正在发布"]} text={pending ? "正在发布" : "发布"} />
+                    <TextStateSwap
+                      labels={["发布", "正在上传 100%", "正在处理", "正在发布"]}
+                      text={uploadProgress
+                        ? uploadProgress.phase === "processing"
+                          ? "正在处理"
+                          : `正在上传 ${uploadProgress.percent}%`
+                        : pending ? "正在发布" : "发布"}
+                    />
                   </button>
                 </div>
               </div>

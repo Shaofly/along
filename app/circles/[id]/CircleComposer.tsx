@@ -7,6 +7,12 @@ import { useRouter } from "next/navigation";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
 import { DissolveTextarea } from "@/app/components/DissolveField";
+import {
+  appendUniqueFiles,
+  uploadMediaFiles,
+  type UploadProgress,
+} from "@/app/components/media-upload";
+import { TextStateSwap } from "@/app/components/TextStateSwap";
 
 const managementOptions = [
   { value: "creator", label: "仅我管理" },
@@ -19,6 +25,7 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
   const [files, setFiles] = useState<File[]>([]);
   const [managementMode, setManagementMode] = useState<"creator" | "circle">("creator");
   const [pending, setPending] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState("");
   const previews = useMemo(
     () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
@@ -36,14 +43,10 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
     setError("");
     const uploadedIds: string[] = [];
     try {
-      for (const file of files) {
-        const form = new FormData();
-        form.set("file", file);
-        const response = await fetch("/api/media", { method: "POST", body: form });
-        const result = (await response.json()) as { id?: string; error?: string };
-        if (!response.ok || !result.id) throw new Error(result.error ?? "图片上传失败。");
-        uploadedIds.push(result.id);
-      }
+      if (files.length) setUploadProgress({ percent: 0, phase: "uploading" });
+      const uploaded = await uploadMediaFiles(files, setUploadProgress);
+      uploadedIds.push(...uploaded.map((media) => media.id));
+      setUploadProgress(null);
       const response = await fetch("/api/posts", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -66,6 +69,7 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
       await Promise.all(uploadedIds.map((id) => fetch(`/api/media/${id}`, { method: "DELETE" })));
       setError(publishError instanceof Error ? publishError.message : "发布失败。");
     } finally {
+      setUploadProgress(null);
       setPending(false);
     }
   }
@@ -116,13 +120,25 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
           <input
             accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             multiple
-            onChange={(event) => setFiles(Array.from(event.target.files ?? []).slice(0, 20))}
+            onChange={(event) => {
+              const result = appendUniqueFiles(files, event.target.files, 20);
+              setFiles(result.files);
+              setError(result.omitted > 0 ? "已忽略重复图片，或已达到每条动态 20 张的上限。" : "");
+              event.currentTarget.value = "";
+            }}
             type="file"
           />
         </label>
         <span>{files.length ? `${files.length} / 20 张` : `${circleName} · ${managementMode === "circle" ? "共同管理" : "仅我管理"}`}</span>
         <button className="publish-button" disabled={pending || (!body.trim() && files.length === 0)} type="submit">
-          {pending ? "正在发布" : "留在圈子里"}
+          <TextStateSwap
+            labels={["留在圈子里", "正在上传 100%", "正在处理", "正在发布"]}
+            text={uploadProgress
+              ? uploadProgress.phase === "processing"
+                ? "正在处理"
+                : `正在上传 ${uploadProgress.percent}%`
+              : pending ? "正在发布" : "留在圈子里"}
+          />
         </button>
       </div>
     </form>

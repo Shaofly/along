@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import { DissolveTextarea } from "@/app/components/DissolveField";
+import { PhotoViewer } from "@/app/components/PhotoViewer";
 import type {
   FeedPost,
   FriendSummary,
@@ -48,7 +49,11 @@ export function PostStream({
   const [editVisibility, setEditVisibility] = useState<PostVisibility>("friends");
   const [editViewerIds, setEditViewerIds] = useState<string[]>([]);
   const [editManagementMode, setEditManagementMode] = useState<"creator" | "circle">("creator");
-  const [lightbox, setLightbox] = useState<{ src: string; alt: string; body: string } | null>(null);
+  const [viewer, setViewer] = useState<{
+    post: FeedPost;
+    index: number;
+    originRect: DOMRect;
+  } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -144,13 +149,13 @@ export function PostStream({
               {post.body ? <p className="entry-body">{post.body}</p> : null}
               {post.media.length > 0 ? (
                 <div className={`post-gallery gallery-${Math.min(post.media.length, 4)}`}>
-                  {post.media.map((media) => (
+                  {post.media.map((media, mediaIndex) => (
                     <button
                       key={media.id}
-                      onClick={() => setLightbox({
-                        src: `/api/media/${media.id}`,
-                        alt: media.originalName,
-                        body: post.body,
+                      onClick={(event) => setViewer({
+                        post,
+                        index: mediaIndex,
+                        originRect: event.currentTarget.getBoundingClientRect(),
                       })}
                       type="button"
                     >
@@ -236,12 +241,19 @@ export function PostStream({
         </div>
       ) : null}
 
-      {lightbox ? (
-        <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label="照片预览">
-          <button className="lightbox-close" onClick={() => setLightbox(null)} type="button" aria-label="关闭">×</button>
-          <img alt={lightbox.alt} src={lightbox.src} />
-          {lightbox.body ? <p>{lightbox.body}</p> : null}
-        </div>
+      {viewer ? (
+        <PhotoViewer
+          author={viewer.post.author}
+          body={viewer.post.body}
+          initialIndex={viewer.index}
+          onClose={() => setViewer(null)}
+          originRect={viewer.originRect}
+          photos={viewer.post.media.map((media) => ({
+            id: media.id,
+            src: `/api/media/${media.id}`,
+            alt: media.originalName,
+          }))}
+        />
       ) : null}
     </div>
   );

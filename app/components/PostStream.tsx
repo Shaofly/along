@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element -- Private media URLs require the viewer's session cookie. */
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
@@ -56,6 +56,12 @@ export function PostStream({
   } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (!posts.some((post) => post.publicationStatus === "publishing")) return;
+    const timer = window.setInterval(() => router.refresh(), 2500);
+    return () => window.clearInterval(timer);
+  }, [posts, router]);
 
   function beginEdit(post: FeedPost) {
     setEditing(post);
@@ -137,6 +143,13 @@ export function PostStream({
                     ) : visibilityLabels[post.visibility]}
                     {post.isHistorical ? " · 历史只读" : ""}
                   </span>
+                  {post.publicationStatus !== "published" ? (
+                    <span className={`publication-state is-${post.publicationStatus}`}>
+                      {post.publicationStatus === "publishing"
+                        ? "照片正在安全处理，完成后会自动公开"
+                        : post.publicationError ?? "照片处理失败，动态尚未公开"}
+                    </span>
+                  ) : null}
                 </div>
                 {post.canEdit || post.canDelete ? (
                   <div className="entry-manage">
@@ -151,6 +164,7 @@ export function PostStream({
                 <div className={`post-gallery gallery-${Math.min(post.media.length, 4)}`}>
                   {post.media.map((media, mediaIndex) => (
                     <button
+                      data-photo-origin={media.id}
                       key={media.id}
                       onClick={(event) => setViewer({
                         post,
@@ -159,7 +173,7 @@ export function PostStream({
                       })}
                       type="button"
                     >
-                      <img alt={media.originalName} src={`/api/media/${media.id}`} />
+                      <img alt={media.originalName} src={`/api/media/${media.id}/thumbnail`} />
                     </button>
                   ))}
                 </div>
@@ -250,7 +264,9 @@ export function PostStream({
           originRect={viewer.originRect}
           photos={viewer.post.media.map((media) => ({
             id: media.id,
-            src: `/api/media/${media.id}`,
+            thumbnailSrc: `/api/media/${media.id}/thumbnail`,
+            src: `/api/media/${media.id}/preview`,
+            hdSrc: `/api/media/${media.id}/hd`,
             alt: media.originalName,
           }))}
         />

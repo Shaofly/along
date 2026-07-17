@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CODEX_RUNTIME="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies"
 
 export PATH="$CODEX_RUNTIME/node/bin:$CODEX_RUNTIME/bin/fallback:$PATH"
+export PRIVATE_DATA_ROOT="$PROJECT_DIR/.data"
 
 cd "$PROJECT_DIR"
 brew services start postgresql@17 >/dev/null 2>&1 || true

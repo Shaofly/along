@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   check,
   index,
@@ -18,6 +19,42 @@ export const postVisibility = pgEnum("post_visibility", [
   "friends",
   "selected",
   "private",
+]);
+
+export const postPublicationStatus = pgEnum("post_publication_status", [
+  "publishing",
+  "published",
+  "failed",
+]);
+
+export const mediaStatus = pgEnum("media_status", [
+  "uploaded",
+  "processing",
+  "ready",
+  "failed",
+  "deleting",
+]);
+
+export const mediaVariantType = pgEnum("media_variant_type", [
+  "thumbnail",
+  "preview",
+  "hd",
+]);
+
+export const mediaUploadStatus = pgEnum("media_upload_status", [
+  "issued",
+  "uploading",
+  "uploaded",
+  "verified",
+  "expired",
+  "failed",
+]);
+
+export const mediaJobStatus = pgEnum("media_job_status", [
+  "queued",
+  "processing",
+  "completed",
+  "failed",
 ]);
 
 export const circleStatus = pgEnum("circle_status", [
@@ -477,6 +514,11 @@ export const posts = pgTable(
     managementMode: circleManagementMode("management_mode")
       .default("creator")
       .notNull(),
+    publicationStatus: postPublicationStatus("publication_status")
+      .default("published")
+      .notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    publicationError: text("publication_error"),
     lastEditedById: text("last_edited_by_id").references(() => user.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -489,6 +531,7 @@ export const posts = pgTable(
     index("posts_author_created_idx").on(table.authorId, table.createdAt),
     index("posts_circle_created_idx").on(table.circleId, table.createdAt),
     index("posts_created_idx").on(table.createdAt),
+    index("posts_publication_created_idx").on(table.publicationStatus, table.createdAt),
     check("posts_body_length", sql`char_length(${table.body}) <= 5000`),
     check("posts_timestamps_ordered", sql`${table.updatedAt} >= ${table.createdAt}`),
     check(
@@ -498,6 +541,14 @@ export const posts = pgTable(
     check(
       "posts_circle_visibility",
       sql`${table.circleId} is null or ${table.visibility} = 'private'`,
+    ),
+    check(
+      "posts_publication_error_consistent",
+      sql`${table.publicationStatus} = 'failed' or ${table.publicationError} is null`,
+    ),
+    check(
+      "posts_published_at_consistent",
+      sql`${table.publicationStatus} <> 'published' or ${table.publishedAt} is not null`,
     ),
   ],
 );
@@ -607,13 +658,136 @@ export const mediaAssets = pgTable(
     originalName: text("original_name").notNull(),
     mimeType: text("mime_type").notNull(),
     byteSize: integer("byte_size").notNull(),
+    status: mediaStatus("status").default("ready").notNull(),
+    sourceMimeType: text("source_mime_type"),
+    sourceByteSize: bigint("source_byte_size", { mode: "number" }),
+    sourceWidth: integer("source_width"),
+    sourceHeight: integer("source_height"),
+    readyAt: timestamp("ready_at", { withTimezone: true }).defaultNow(),
+    failureCode: text("failure_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
     index("media_assets_owner_idx").on(table.ownerId),
+    index("media_assets_owner_status_idx").on(table.ownerId, table.status),
     check("media_assets_positive_size", sql`${table.byteSize} > 0`),
+    check(
+      "media_assets_source_size_positive",
+      sql`${table.sourceByteSize} is null or ${table.sourceByteSize} > 0`,
+    ),
+    check(
+      "media_assets_source_dimensions_positive",
+      sql`(${table.sourceWidth} is null and ${table.sourceHeight} is null)
+        or (${table.sourceWidth} > 0 and ${table.sourceHeight} > 0)`,
+    ),
+    check(
+      "media_assets_ready_consistent",
+      sql`${table.status} <> 'ready' or ${table.readyAt} is not null`,
+    ),
+    check(
+      "media_assets_failure_consistent",
+      sql`${table.status} = 'failed' or ${table.failureCode} is null`,
+    ),
+    check("media_assets_timestamps_ordered", sql`${table.updatedAt} >= ${table.createdAt}`),
+  ],
+);
+
+export const mediaVariants = pgTable(
+  "media_variants",
+  {
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    variantType: mediaVariantType("variant_type").notNull(),
+    storageKey: text("storage_key").notNull().unique(),
+    mimeType: text("mime_type").notNull(),
+    byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    etag: text("etag"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.mediaId, table.variantType] }),
+    index("media_variants_media_idx").on(table.mediaId),
+    check("media_variants_positive_size", sql`${table.byteSize} > 0`),
+    check(
+      "media_variants_positive_dimensions",
+      sql`${table.width} > 0 and ${table.height} > 0`,
+    ),
+  ],
+);
+
+export const mediaUploadSessions = pgTable(
+  "media_upload_sessions",
+  {
+    id: text("id").primaryKey(),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id),
+    incomingKey: text("incoming_key").notNull().unique(),
+    status: mediaUploadStatus("status").default("issued").notNull(),
+    expectedMimeType: text("expected_mime_type").notNull(),
+    expectedByteSize: bigint("expected_byte_size", { mode: "number" }).notNull(),
+    objectEtag: text("object_etag"),
+    errorCode: text("error_code"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("media_upload_sessions_owner_status_idx").on(table.ownerId, table.status),
+    index("media_upload_sessions_expiry_idx").on(table.expiresAt),
+    check("media_upload_sessions_positive_size", sql`${table.expectedByteSize} > 0`),
+    check(
+      "media_upload_sessions_completion_consistent",
+      sql`${table.status} not in ('verified', 'failed', 'expired')
+        or ${table.completedAt} is not null`,
+    ),
+  ],
+);
+
+export const mediaProcessingJobs = pgTable(
+  "media_processing_jobs",
+  {
+    id: text("id").primaryKey(),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    uploadSessionId: text("upload_session_id")
+      .references(() => mediaUploadSessions.id, { onDelete: "set null" }),
+    provider: text("provider").notNull(),
+    providerJobId: text("provider_job_id"),
+    status: mediaJobStatus("status").default("queued").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("media_processing_jobs_media_created_idx").on(table.mediaId, table.createdAt),
+    index("media_processing_jobs_status_idx").on(table.status, table.createdAt),
+    check("media_processing_jobs_attempts_nonnegative", sql`${table.attempts} >= 0`),
+    check(
+      "media_processing_jobs_completion_consistent",
+      sql`${table.status} not in ('completed', 'failed') or ${table.completedAt} is not null`,
+    ),
   ],
 );
 

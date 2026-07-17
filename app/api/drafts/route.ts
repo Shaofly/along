@@ -17,7 +17,7 @@ import { auth } from "@/lib/auth";
 import { getActiveCircleMembership } from "@/lib/circles";
 import { deleteDraftWithAssets, getLatestDraft } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
-import { deleteStoredFile } from "@/lib/storage";
+import { deleteMediaAsset } from "@/lib/media/service";
 
 const saveDraftSchema = z.object({
   id: z.string().optional(),
@@ -111,7 +111,7 @@ export async function PUT(request: Request) {
   const id = parsed.data.id ?? randomUUID();
   const previousMedia = parsed.data.id
     ? await db
-        .select({ id: mediaAssets.id, storageKey: mediaAssets.storageKey })
+        .select({ id: mediaAssets.id })
         .from(draftMedia)
         .innerJoin(mediaAssets, eq(draftMedia.mediaId, mediaAssets.id))
         .where(eq(draftMedia.draftId, id))
@@ -150,13 +150,10 @@ export async function PUT(request: Request) {
         mediaIds.map((mediaId, position) => ({ draftId: id, mediaId, position })),
       );
     }
-    if (removedMedia.length) {
-      await transaction
-        .delete(mediaAssets)
-        .where(inArray(mediaAssets.id, removedMedia.map((media) => media.id)));
-    }
   });
-  await Promise.all(removedMedia.map((media) => deleteStoredFile(media.storageKey)));
+  await Promise.all(
+    removedMedia.map((media) => deleteMediaAsset(media.id)),
+  );
 
   return NextResponse.json({ ok: true, id });
 }

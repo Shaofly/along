@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
-import { db } from "@/db";
-import { mediaAssets } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { deleteStoredFile, saveImage } from "@/lib/storage";
+import { createLocalUpload, processLocalMedia } from "@/lib/media/service";
 
 export async function POST(request: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -19,26 +16,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "请选择图片。" }, { status: 400 });
   }
 
-  let stored: Awaited<ReturnType<typeof saveImage>> | null = null;
   try {
-    stored = await saveImage(file, session.user.id);
-    const id = randomUUID();
-    await db.insert(mediaAssets).values({
-      id,
-      ownerId: session.user.id,
-      storageKey: stored.storageKey,
-      originalName: file.name.slice(0, 240) || "image",
-      mimeType: stored.mimeType,
-      byteSize: stored.byteSize,
-    });
+    const media = await createLocalUpload(file, session.user.id);
+    after(() => processLocalMedia(media.id));
     return NextResponse.json({
-      id,
-      name: file.name,
-      mimeType: stored.mimeType,
-      url: `/api/media/${id}`,
+      id: media.id,
+      name: media.originalName,
+      mimeType: media.mimeType,
+      status: media.status,
+      urls: {
+        thumbnail: `/api/media/${media.id}/thumbnail`,
+        preview: `/api/media/${media.id}/preview`,
+        hd: `/api/media/${media.id}/hd`,
+      },
     });
   } catch (error) {
-    if (stored) await deleteStoredFile(stored.storageKey);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "图片上传失败。" },
       { status: 400 },

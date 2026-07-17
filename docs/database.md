@@ -10,9 +10,9 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 邀请与关系 | `invitations`、`invitation_sponsors`、`friendships`、`friend_remarks` |
 | 小圈子 | `circles`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
 | 内容 | `posts`、`post_viewers`、`circle_post_snapshots`、`drafts`、`draft_viewers` |
-| 媒体 | `media_assets`、`post_media`、`draft_media` |
+| 媒体 | `media_assets`、`media_variants`、`media_upload_sessions`、`media_processing_jobs`、`post_media`、`draft_media` |
 
-二进制图片不进入 PostgreSQL。数据库只保存随机存储键、归属、类型、大小和内容关联。
+二进制图片不进入 PostgreSQL。数据库只保存随机存储键、归属、类型、大小、尺寸、处理状态和内容关联。
 
 ## 人物名称与关系身份
 
@@ -47,8 +47,12 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 草稿沿用正式内容的可见范围与管理方式约束，但始终只允许作者通过草稿接口读取；指定查看者和圈子仅用于恢复发布设置，不会让其他人提前看到草稿。
 - 每个媒体资源最多关联一条草稿，草稿内位置保持 0 至 19 唯一；草稿被放弃时，未进入正式内容的私有媒体一并清理，发布成功时只删除草稿关系而保留正式媒体。
 - 正文长度、媒体字节数和单条内容的媒体排序位置有数据库级边界。
+- `media_assets` 是逻辑资源，`media_variants` 以“媒体 + 变体类型”为主键保存 `thumbnail`、`preview`、`hd` 三个正式对象。
+- `media_upload_sessions` 保存 incoming Key、预期类型和大小以及 24 小时过期时间；`media_processing_jobs` 保存处理提供方、尝试次数和失败原因。
+- 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
+- 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。
 
-跨表规则，例如“空正文必须至少有一张图片”“selected 动态必须至少有一位查看者”，无法用普通 CHECK 可靠表达，继续由事务内的服务端业务层验证。
+跨表规则，例如“空正文必须至少有一张图片”“selected 动态必须至少有一位查看者”“全部关联媒体 ready 后才能把动态变为 published”，无法用普通 CHECK 可靠表达，继续由事务内的服务端业务层验证。
 
 ## 迁移规则
 

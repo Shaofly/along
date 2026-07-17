@@ -5,7 +5,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { draftMedia, drafts, draftViewers, mediaAssets, postMedia } from "@/db/schema";
 import type { HomeDraft } from "@/lib/content-types";
-import { deleteStoredFile } from "@/lib/storage";
+import { deleteMediaAsset } from "@/lib/media/service";
 
 export async function getLatestDraft(authorId: string): Promise<HomeDraft | null> {
   const [draft] = await db
@@ -63,7 +63,7 @@ export async function deleteDraftWithAssets(authorId: string, draftId: string) {
   if (!draft) return false;
 
   const linkedMedia = await db
-    .select({ id: mediaAssets.id, storageKey: mediaAssets.storageKey })
+    .select({ id: mediaAssets.id })
     .from(draftMedia)
     .innerJoin(mediaAssets, eq(draftMedia.mediaId, mediaAssets.id))
     .where(eq(draftMedia.draftId, draftId));
@@ -77,14 +77,7 @@ export async function deleteDraftWithAssets(authorId: string, draftId: string) {
   const publishedIds = new Set(published.map((media) => media.id));
   const removable = linkedMedia.filter((media) => !publishedIds.has(media.id));
 
-  await db.transaction(async (transaction) => {
-    await transaction.delete(drafts).where(eq(drafts.id, draftId));
-    if (removable.length) {
-      await transaction
-        .delete(mediaAssets)
-        .where(inArray(mediaAssets.id, removable.map((media) => media.id)));
-    }
-  });
-  await Promise.all(removable.map((media) => deleteStoredFile(media.storageKey)));
+  await db.delete(drafts).where(eq(drafts.id, draftId));
+  await Promise.all(removable.map((media) => deleteMediaAsset(media.id)));
   return true;
 }

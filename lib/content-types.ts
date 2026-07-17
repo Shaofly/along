@@ -19,6 +19,8 @@ export type FeedPost = {
   id: string;
   body: string;
   visibility: PostVisibility;
+  publicationStatus: "publishing" | "published" | "failed";
+  publicationError: string | null;
   createdAt: string;
   updatedAt: string;
   author: {

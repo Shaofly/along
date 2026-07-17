@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -8,7 +8,7 @@ import { circles, mediaAssets, postMedia, posts, postViewers } from "@/db/schema
 import { auth } from "@/lib/auth";
 import { getActiveCircleMembership } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
-import { deleteStoredFile } from "@/lib/storage";
+import { deleteMediaAsset } from "@/lib/media/service";
 
 const editPostSchema = z.object({
   body: z.string().trim().max(5000, "正文不能超过 5000 个字"),
@@ -152,18 +152,13 @@ export async function DELETE(
   if (!post) return NextResponse.json({ error: "动态不存在或当前不可删除。" }, { status: 404 });
 
   const assets = await db
-    .select({ id: mediaAssets.id, storageKey: mediaAssets.storageKey })
+    .select({ id: mediaAssets.id })
     .from(postMedia)
     .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
     .where(eq(postMedia.postId, id));
 
   await db.transaction(async (transaction) => {
     await transaction.delete(posts).where(eq(posts.id, id));
-    if (assets.length > 0) {
-      await transaction
-        .delete(mediaAssets)
-        .where(inArray(mediaAssets.id, assets.map((asset) => asset.id)));
-    }
     if (post.circleId) {
       await transaction
         .update(circles)
@@ -171,6 +166,8 @@ export async function DELETE(
         .where(eq(circles.id, post.circleId));
     }
   });
-  await Promise.all(assets.map((asset) => deleteStoredFile(asset.storageKey)));
+  await Promise.all(
+    assets.map((asset) => deleteMediaAsset(asset.id)),
+  );
   return NextResponse.json({ ok: true });
 }

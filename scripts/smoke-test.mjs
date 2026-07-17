@@ -14,8 +14,18 @@ assert(databaseUrl && gate, "DATABASE_URL and REGISTRATION_GATE_SECRET are requi
 const pool = new pg.Pool({ connectionString: databaseUrl });
 const suffix = randomUUID().slice(0, 8);
 const users = [
-  { name: "冒烟测试甲", email: `along-a-${suffix}@example.invalid`, password: `Along-test-${suffix}-A` },
-  { name: "冒烟测试乙", email: `along-b-${suffix}@example.invalid`, password: `Along-test-${suffix}-B` },
+  {
+    name: "冒烟测试甲",
+    realName: "冒烟测试甲",
+    email: `along-a-${suffix}@example.invalid`,
+    password: `Along-test-${suffix}-A`,
+  },
+  {
+    name: "冒烟测试乙",
+    realName: "冒烟测试乙",
+    email: `along-b-${suffix}@example.invalid`,
+    password: `Along-test-${suffix}-B`,
+  },
 ];
 const createdPostIds = [];
 const createdCircleIds = [];
@@ -78,7 +88,29 @@ async function upload(cookie, color) {
     body: form,
   });
   await assertStatus(response, 200);
-  return response.json();
+  const media = await response.json();
+  assert.equal(media.status, "processing");
+  await waitForMediaReady(cookie, media.id);
+  return media;
+}
+
+async function waitForMediaReady(cookie, mediaId) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const response = await api(`/api/media/${mediaId}/status`, {
+      headers: { cookie },
+    });
+    await assertStatus(response, 200);
+    const result = await response.json();
+    if (result.status === "ready") return;
+    assert.notEqual(
+      result.status,
+      "failed",
+      `Media processing failed: ${result.failureCode ?? "unknown"}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  assert.fail(`Media ${mediaId} did not become ready before the timeout`);
 }
 
 async function createPost(cookie, payload) {
@@ -119,13 +151,25 @@ try {
   const friendHome = await api("/home", { headers: { cookie: cookieB } });
   assert.equal(friendHome.status, 200);
   assert.match(await friendHome.text(), new RegExp(`朋友可见冒烟测试 ${suffix}`));
-  const friendImage = await api(`/api/media/${publicMedia.id}`, { headers: { cookie: cookieB } });
-  assert.equal(friendImage.status, 200);
-  const imageMetadata = await sharp(Buffer.from(await friendImage.arrayBuffer())).metadata();
-  assert.equal(imageMetadata.width, 1440);
-  assert.equal(imageMetadata.height, 2560);
-  assert.equal(imageMetadata.exif, undefined);
-  assert.equal(imageMetadata.orientation, undefined);
+  const expectedVariants = [
+    { type: "thumbnail", width: 405, height: 720, format: "webp" },
+    { type: "preview", width: 1080, height: 1920, format: "webp" },
+    { type: "hd", width: 1800, height: 3200, format: "jpeg" },
+  ];
+  for (const expected of expectedVariants) {
+    const response = await api(
+      `/api/media/${publicMedia.id}/${expected.type}`,
+      { headers: { cookie: cookieB } },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-media-variant"), expected.type);
+    const metadata = await sharp(Buffer.from(await response.arrayBuffer())).metadata();
+    assert.equal(metadata.width, expected.width);
+    assert.equal(metadata.height, expected.height);
+    assert.equal(metadata.format, expected.format);
+    assert.equal(metadata.exif, undefined);
+    assert.equal(metadata.orientation, undefined);
+  }
 
   const privateMedia = await upload(cookieA, { r: 235, g: 192, b: 177 });
   await createPost(cookieA, {
@@ -140,7 +184,11 @@ try {
   const profileUpdate = await api("/api/profile", {
     method: "PATCH",
     headers: { cookie: cookieA, "content-type": "application/json" },
-    body: JSON.stringify({ name: users[0].name, bio: "这是一条测试简介。" }),
+    body: JSON.stringify({
+      realName: users[0].realName,
+      nickname: "",
+      bio: "这是一条测试简介。",
+    }),
   });
   await assertStatus(profileUpdate, 200);
 
@@ -240,7 +288,7 @@ try {
     await assertStatus(response, 200);
   }
   createdPostIds.length = 0;
-  console.log("Smoke test passed: auth, personal visibility, private media, circles, shared editing, exit snapshots, future-content isolation, and cleanup.");
+  console.log("Smoke test passed: auth, media variants and metadata stripping, personal visibility, circles, shared editing, exit snapshots, future-content isolation, and cleanup.");
 } finally {
   const rows = await pool.query(
     `select id from "user" where email = any($1::text[])`,
@@ -249,7 +297,17 @@ try {
   const userIds = rows.rows.map((row) => row.id);
   if (userIds.length > 0) {
     const media = await pool.query(
-      `select storage_key from media_assets where owner_id = any($1::text[])`,
+      `select ma.storage_key, mus.incoming_key
+       from media_assets ma
+       left join media_upload_sessions mus on mus.media_id = ma.id
+       where ma.owner_id = any($1::text[])`,
+      [userIds],
+    );
+    const variants = await pool.query(
+      `select mv.storage_key
+       from media_variants mv
+       join media_assets ma on ma.id = mv.media_id
+       where ma.owner_id = any($1::text[])`,
       [userIds],
     );
     await pool.query(`delete from posts where author_id = any($1::text[])`, [userIds]);
@@ -261,9 +319,14 @@ try {
     );
     await pool.query(`delete from "user" where id = any($1::text[])`, [userIds]);
     await Promise.all(
-      media.rows.map((row) =>
-        rm(path.resolve(".data/uploads", row.storage_key), { force: true }),
-      ),
+      [
+        ...media.rows.flatMap((row) => [row.storage_key, row.incoming_key]),
+        ...variants.rows.map((row) => row.storage_key),
+      ]
+        .filter(Boolean)
+        .map((storageKey) =>
+          rm(path.resolve(".data/media", storageKey), { force: true }),
+        ),
     );
   }
   await pool.end();

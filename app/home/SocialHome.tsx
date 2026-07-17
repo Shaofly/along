@@ -460,7 +460,7 @@ export function SocialHome({
                 style={{ zIndex: boardOrder.indexOf(itemId) + 1 }}
                 type="button"
               >
-                {media ? <img alt={media.originalName} src={`/api/media/${media.id}`} /> : null}
+                {media ? <img alt={media.originalName} src={`/api/media/${media.id}/thumbnail`} /> : null}
                 <span className="photo-glass-label">{["晚风", "一起", "最近"][index]}</span>
               </button>
             );
@@ -528,7 +528,7 @@ export function SocialHome({
                 <div className="upload-previews">
                   {savedMedia.map((media, index) => (
                     <figure key={media.id}>
-                      <img alt={media.originalName} src={`/api/media/${media.id}`} />
+                      <img alt={media.originalName} src={`/api/media/${media.id}/thumbnail`} />
                       <button
                         aria-label={`移除图片 ${media.originalName}`}
                         className="remove-preview"

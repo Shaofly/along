@@ -5,8 +5,9 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { draftMedia, mediaAssets, postMedia } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { canViewPost } from "@/lib/content";
-import { deleteStoredFile, readStoredFile } from "@/lib/storage";
+import { canAccessMedia } from "@/lib/media/access";
+import { mediaResponse } from "@/lib/media/response";
+import { deleteMediaAsset } from "@/lib/media/service";
 
 async function findAsset(id: string) {
   const [asset] = await db
@@ -25,38 +26,10 @@ export async function GET(
   if (!session) return new Response(null, { status: 401 });
 
   const { id } = await context.params;
-  const asset = await findAsset(id);
-  if (!asset) return new Response(null, { status: 404 });
-
-  let allowed = asset.ownerId === session.user.id;
-  if (!allowed) {
-    const links = await db
-      .select({ postId: postMedia.postId })
-      .from(postMedia)
-      .where(eq(postMedia.mediaId, id));
-    for (const link of links) {
-      if (await canViewPost(session.user.id, link.postId)) {
-        allowed = true;
-        break;
-      }
-    }
-  }
-  if (!allowed) return new Response(null, { status: 404 });
-
-  try {
-    const bytes = await readStoredFile(asset.storageKey);
-    return new Response(bytes, {
-      headers: {
-        "content-type": asset.mimeType,
-        "content-length": String(asset.byteSize),
-        "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.originalName)}`,
-        "cache-control": "private, no-store",
-        "x-content-type-options": "nosniff",
-      },
-    });
-  } catch {
+  if (!(await canAccessMedia(session.user.id, id))) {
     return new Response(null, { status: 404 });
   }
+  return mediaResponse(id, "preview");
 }
 
 export async function DELETE(
@@ -91,7 +64,6 @@ export async function DELETE(
     return NextResponse.json({ error: "草稿中的图片需要随草稿更新。" }, { status: 409 });
   }
 
-  await db.delete(mediaAssets).where(eq(mediaAssets.id, id));
-  await deleteStoredFile(asset.storageKey);
+  await deleteMediaAsset(id);
   return NextResponse.json({ ok: true });
 }

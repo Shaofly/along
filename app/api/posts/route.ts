@@ -75,7 +75,7 @@ export async function POST(request: Request) {
 
   if (mediaIds.length > 0) {
     const ownedMedia = await db
-      .select({ id: mediaAssets.id })
+      .select({ id: mediaAssets.id, status: mediaAssets.status })
       .from(mediaAssets)
       .where(
         and(
@@ -87,7 +87,11 @@ export async function POST(request: Request) {
       .select({ id: postMedia.mediaId })
       .from(postMedia)
       .where(inArray(postMedia.mediaId, mediaIds));
-    if (ownedMedia.length !== mediaIds.length || existingLinks.length > 0) {
+    if (
+      ownedMedia.length !== mediaIds.length ||
+      existingLinks.length > 0 ||
+      ownedMedia.some((media) => media.status === "failed" || media.status === "deleting")
+    ) {
       return NextResponse.json({ error: "有图片无效或已经发布。" }, { status: 400 });
     }
   }
@@ -110,6 +114,16 @@ export async function POST(request: Request) {
   }
 
   const id = randomUUID();
+  const mediaRows = mediaIds.length
+    ? await db
+        .select({ status: mediaAssets.status })
+        .from(mediaAssets)
+        .where(inArray(mediaAssets.id, mediaIds))
+    : [];
+  const publicationStatus = mediaRows.some((media) => media.status !== "ready")
+    ? "publishing" as const
+    : "published" as const;
+  const now = new Date();
   await db.transaction(async (transaction) => {
     await transaction.insert(posts).values({
       id,
@@ -118,6 +132,8 @@ export async function POST(request: Request) {
       body: parsed.data.body,
       visibility: circleId ? "private" : parsed.data.visibility,
       managementMode: circleId ? parsed.data.managementMode : "creator",
+      publicationStatus,
+      publishedAt: publicationStatus === "published" ? now : null,
     });
     if (!circleId && parsed.data.visibility === "selected") {
       await transaction.insert(postViewers).values(
@@ -140,5 +156,5 @@ export async function POST(request: Request) {
     }
   });
 
-  return NextResponse.json({ ok: true, id });
+  return NextResponse.json({ ok: true, id, publicationStatus });
 }

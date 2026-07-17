@@ -27,25 +27,68 @@ import { createPortal } from "react-dom";
 
 type ViewerPhoto = {
   id: string;
+  thumbnailSrc: string;
   src: string;
+  hdSrc: string;
   alt: string;
 };
 
 type Point = { x: number; y: number };
 type GestureMode = "pending" | "horizontal" | "dismiss" | "pan" | "pinch";
+type ViewerRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
 
-const MIN_SCALE = 1;
-const MAX_SCALE = 4;
+type CloseVisual = {
+  from: ViewerRect;
+  scale: number;
+  src: string;
+  x: number;
+  y: number;
+};
+
+const MOBILE_MIN_SCALE = 1;
+const MOBILE_MAX_SCALE = 4;
+const DESKTOP_MIN_SCALE = 0.5;
+const DESKTOP_MAX_SCALE = 10;
+const DESKTOP_FIT_PERCENT = 50;
 const SLIDE_DURATION = 280;
+const CLOSE_DURATION = 280;
 
 function distance(first: Point, second: Point) {
   return Math.hypot(second.x - first.x, second.y - first.y);
 }
 
-function rubberScale(value: number) {
-  if (value < MIN_SCALE) return Math.max(0.78, MIN_SCALE - (MIN_SCALE - value) * 0.3);
-  if (value > MAX_SCALE) return Math.min(4.5, MAX_SCALE + (value - MAX_SCALE) * 0.22);
+function rubberScale(value: number, minScale: number, maxScale: number) {
+  if (value < minScale) {
+    return Math.max(minScale * 0.78, minScale - (minScale - value) * 0.3);
+  }
+  if (value > maxScale) {
+    return Math.min(maxScale * 1.12, maxScale + (value - maxScale) * 0.22);
+  }
   return value;
+}
+
+function visibleImageRect(image: HTMLImageElement): ViewerRect {
+  const box = image.getBoundingClientRect();
+  if (!image.naturalWidth || !image.naturalHeight) {
+    return { height: box.height, left: box.left, top: box.top, width: box.width };
+  }
+  const containScale = Math.min(
+    box.width / image.naturalWidth,
+    box.height / image.naturalHeight,
+  );
+  const width = image.naturalWidth * containScale;
+  const height = image.naturalHeight * containScale;
+  return {
+    height,
+    left: box.left + (box.width - width) / 2,
+    top: box.top + (box.height - height) / 2,
+    width,
+  };
 }
 
 export function PhotoViewer({
@@ -71,7 +114,17 @@ export function PhotoViewer({
   const [slideAnimating, setSlideAnimating] = useState(false);
   const [imageTransitioning, setImageTransitioning] = useState(false);
   const [backdropOpacity, setBackdropOpacity] = useState(1);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [closeVisual, setCloseVisual] = useState<CloseVisual | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [previewReady, setPreviewReady] = useState<Record<string, boolean>>({});
+  const [hdUrls, setHdUrls] = useState<Record<string, string>>({});
+  const [hdReady, setHdReady] = useState<Record<string, boolean>>({});
+  const [hdProgress, setHdProgress] = useState<number | null>(null);
+  const hdUrlsRef = useRef<Record<string, string>>({});
+  const hdRequestRef = useRef<XMLHttpRequest | null>(null);
+  const clickGuardCleanupRef = useRef<(() => void) | null>(null);
   const pointers = useRef(new Map<number, Point>());
   const gesture = useRef<{
     mode: GestureMode;
@@ -86,23 +139,129 @@ export function PhotoViewer({
   const offsetRef = useRef(offset);
   const pendingSlideDirection = useRef<-1 | 1 | null>(null);
   const closingRef = useRef(false);
+  const closeAfterHistoryRef = useRef(false);
+  const closeTimerRef = useRef(0);
   const historyToken = useId();
   const photo = photos[index];
+  const photoIdRef = useRef(photo?.id ?? "");
+  const originRectRef = useRef(originRect);
+  const hdUrl = photo ? hdUrls[photo.id] : undefined;
+  const minScale = isMobile ? MOBILE_MIN_SCALE : DESKTOP_MIN_SCALE;
+  const maxScale = isMobile ? MOBILE_MAX_SCALE : DESKTOP_MAX_SCALE;
 
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { offsetRef.current = offset; }, [offset]);
+  useEffect(() => { photoIdRef.current = photo?.id ?? ""; }, [photo?.id]);
+  useEffect(() => { originRectRef.current = originRect; }, [originRect]);
+  useEffect(() => {
+    hdUrlsRef.current = hdUrls;
+  }, [hdUrls]);
+  useEffect(() => () => {
+    hdRequestRef.current?.abort();
+    window.clearTimeout(closeTimerRef.current);
+    clickGuardCleanupRef.current?.();
+    Object.values(hdUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 700px)");
+    const update = () => {
+      const mobile = media.matches;
+      setIsMobile(mobile);
+      setScale((current) => Math.max(
+        mobile ? MOBILE_MIN_SCALE : DESKTOP_MIN_SCALE,
+        Math.min(mobile ? MOBILE_MAX_SCALE : DESKTOP_MAX_SCALE, current),
+      ));
+      setOffset({ x: 0, y: 0 });
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
-  const closeFromHistory = useCallback(() => {
+  const guardNextDocumentClick = useCallback(() => {
+    clickGuardCleanupRef.current?.();
+    let timer = 0;
+    const cleanup = () => {
+      document.removeEventListener("click", blockClick, true);
+      window.clearTimeout(timer);
+      if (clickGuardCleanupRef.current === cleanup) clickGuardCleanupRef.current = null;
+    };
+    const blockClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      cleanup();
+    };
+    document.addEventListener("click", blockClick, true);
+    timer = window.setTimeout(cleanup, 500);
+    clickGuardCleanupRef.current = cleanup;
+  }, []);
+
+  const finishClose = useCallback((historyAlreadyChanged: boolean) => {
+    if (
+      !historyAlreadyChanged
+      && window.history.state?.photoViewer === historyToken
+    ) {
+      closeAfterHistoryRef.current = true;
+      window.history.back();
+      return;
+    }
+    onClose();
+  }, [historyToken, onClose]);
+
+  const animateClose = useCallback((historyAlreadyChanged = false) => {
     if (closingRef.current) return;
     closingRef.current = true;
-    onClose();
-  }, [onClose]);
+    setIsClosing(true);
+    hdRequestRef.current?.abort();
+    setSheetOpen(false);
+    setImageTransitioning(true);
+    setOffset({ x: 0, y: 0 });
+    setScale(1);
+    setBackdropOpacity(0);
+
+    const currentImage = stageRef.current?.querySelector<HTMLImageElement>(
+      ".photo-viewer-slide.is-current .photo-viewer-hd-image.is-ready,"
+      + ".photo-viewer-slide.is-current .photo-viewer-preview.is-ready,"
+      + ".photo-viewer-slide.is-current .photo-viewer-placeholder",
+    );
+    const currentOrigin = document.querySelector<HTMLElement>(
+      `[data-photo-origin="${photoIdRef.current}"]`,
+    );
+    const targetRect = currentOrigin?.getBoundingClientRect() ?? originRectRef.current;
+    if (currentImage && targetRect && !reducedMotion) {
+      const from = visibleImageRect(currentImage);
+      setCloseVisual({
+        from,
+        scale: Math.max(
+          0.04,
+          Math.min(targetRect.width / from.width, targetRect.height / from.height),
+        ),
+        src: currentImage.currentSrc || currentImage.src,
+        x: targetRect.left + targetRect.width / 2 - (from.left + from.width / 2),
+        y: targetRect.top + targetRect.height / 2 - (from.top + from.height / 2),
+      });
+    }
+
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = window.setTimeout(
+      () => finishClose(historyAlreadyChanged),
+      reducedMotion ? 0 : CLOSE_DURATION,
+    );
+  }, [finishClose, reducedMotion]);
+
+  const closeFromHistory = useCallback(() => {
+    if (closeAfterHistoryRef.current) {
+      closeAfterHistoryRef.current = false;
+      onClose();
+      return;
+    }
+    animateClose(true);
+  }, [animateClose, onClose]);
 
   const requestClose = useCallback(() => {
-    if (closingRef.current) return;
-    if (window.history.state?.photoViewer === historyToken) window.history.back();
-    else closeFromHistory();
-  }, [closeFromHistory, historyToken]);
+    animateClose(false);
+  }, [animateClose]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -122,6 +281,9 @@ export function PhotoViewer({
   }, []);
 
   const finishSlideImmediately = useCallback((direction: -1 | 1) => {
+    hdRequestRef.current?.abort();
+    hdRequestRef.current = null;
+    setHdProgress(null);
     setIndex((current) => (current + direction + photos.length) % photos.length);
     setSlideX(0);
     setSlideAnimating(false);
@@ -153,12 +315,16 @@ export function PhotoViewer({
       if (event.key === "Escape") requestClose();
       if (event.key === "ArrowLeft") movePhoto(-1);
       if (event.key === "ArrowRight") movePhoto(1);
-      if (event.key === "+" || event.key === "=") setScale((current) => Math.min(MAX_SCALE, current + 0.5));
-      if (event.key === "-") setScale((current) => Math.max(MIN_SCALE, current - 0.5));
+      if (event.key === "+" || event.key === "=") {
+        setScale((current) => Math.min(maxScale, current + 0.5));
+      }
+      if (event.key === "-") {
+        setScale((current) => Math.max(minScale, current - 0.5));
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [movePhoto, requestClose]);
+  }, [maxScale, minScale, movePhoto, requestClose]);
 
   const clampPan = useCallback((point: Point, currentScale: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -210,7 +376,11 @@ export function PhotoViewer({
 
     if (points.length >= 2 && gesture.current.mode === "pinch") {
       const ratio = distance(points[0], points[1]) / Math.max(1, gesture.current.pinchDistance);
-      setScale(rubberScale(gesture.current.startScale * ratio));
+      setScale(rubberScale(
+        gesture.current.startScale * ratio,
+        minScale,
+        maxScale,
+      ));
       return;
     }
 
@@ -262,7 +432,10 @@ export function PhotoViewer({
     const velocityY = dy / elapsed;
 
     if (activeGesture.mode === "pinch") {
-      const snappedScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleRef.current));
+      const snappedScale = Math.max(
+        minScale,
+        Math.min(maxScale, scaleRef.current),
+      );
       setImageTransitioning(true);
       setScale(snappedScale);
       if (snappedScale === 1) setOffset({ x: 0, y: 0 });
@@ -281,17 +454,22 @@ export function PhotoViewer({
     } else if (activeGesture.mode === "dismiss") {
       setImageTransitioning(true);
       if (Math.abs(dy) > 92 || Math.abs(velocityY) > 0.55) {
-        setOffset({ x: dx * 0.2, y: dy > 0 ? window.innerHeight : -window.innerHeight });
-        setScale(0.72);
-        setBackdropOpacity(0);
-        window.setTimeout(requestClose, reducedMotion ? 0 : 180);
+        event.preventDefault();
+        event.stopPropagation();
+        guardNextDocumentClick();
+        animateClose(false);
       } else {
         resetImage();
       }
     } else if (activeGesture.mode === "pending" && Math.hypot(dx, dy) < 7 && elapsed < 360) {
       const isMobile = window.matchMedia("(max-width: 700px)").matches;
       const clickedOutsideStage = !(event.target as Element).closest(".photo-viewer-stage-wrap");
-      if (isMobile || clickedOutsideStage) requestClose();
+      if (isMobile || clickedOutsideStage) {
+        event.preventDefault();
+        event.stopPropagation();
+        guardNextDocumentClick();
+        requestClose();
+      }
     }
 
     gesture.current = null;
@@ -301,7 +479,7 @@ export function PhotoViewer({
   function zoomBy(amount: number) {
     setImageTransitioning(true);
     setScale((current) => {
-      const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, current + amount));
+      const next = Math.max(minScale, Math.min(maxScale, current + amount));
       if (next === 1) setOffset({ x: 0, y: 0 });
       return next;
     });
@@ -310,7 +488,40 @@ export function PhotoViewer({
 
   function onWheel(event: ReactWheelEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!slideAnimating) zoomBy(event.deltaY < 0 ? 0.35 : -0.35);
+    if (!slideAnimating) zoomBy(event.deltaY < 0 ? 0.12 : -0.12);
+  }
+
+  function loadHd() {
+    if (!photo || hdUrls[photo.id] || hdProgress !== null) return;
+    const request = new XMLHttpRequest();
+    hdRequestRef.current = request;
+    setHdProgress(0);
+    request.open("GET", photo.hdSrc);
+    request.responseType = "blob";
+    request.addEventListener("progress", (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      setHdProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+    });
+    request.addEventListener("load", () => {
+      if (hdRequestRef.current !== request) return;
+      hdRequestRef.current = null;
+      if (request.status < 200 || request.status >= 300 || !(request.response instanceof Blob)) {
+        setHdProgress(null);
+        return;
+      }
+      const url = URL.createObjectURL(request.response);
+      setHdUrls((current) => ({ ...current, [photo.id]: url }));
+      setHdProgress(null);
+    });
+    request.addEventListener("error", () => {
+      if (hdRequestRef.current !== request) return;
+      hdRequestRef.current = null;
+      setHdProgress(null);
+    });
+    request.addEventListener("abort", () => {
+      if (hdRequestRef.current === request) hdRequestRef.current = null;
+    });
+    request.send();
   }
 
   const entrance = useMemo(() => {
@@ -335,7 +546,7 @@ export function PhotoViewer({
       animate={{ backgroundColor: `rgba(24, 28, 26, ${0.78 * backdropOpacity})` }}
       aria-label="照片查看器"
       aria-modal="true"
-      className="photo-viewer"
+      className={`photo-viewer${isClosing ? " is-closing" : ""}`}
       initial={{ backgroundColor: "rgba(24, 28, 26, 0)" }}
       onPointerCancel={onPointerUp}
       onPointerDown={onPointerDown}
@@ -360,12 +571,20 @@ export function PhotoViewer({
 
       <div className="photo-viewer-shell">
         <motion.div
-          animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+          animate={{
+            opacity: isClosing ? 0 : 1,
+            scale: 1,
+            x: 0,
+            y: 0,
+          }}
           className={`photo-viewer-stage-wrap${imageTransitioning ? " is-image-transitioning" : ""}`}
           initial={{ opacity: reducedMotion ? 1 : 0.45, ...entrance }}
           ref={stageRef}
           style={{ backgroundColor: `rgba(15, 19, 17, ${0.72 * backdropOpacity})` }}
-          transition={{ duration: reducedMotion ? 0 : 0.32, ease: [0.22, 1, 0.36, 1] }}
+          transition={{
+            duration: reducedMotion ? 0 : isClosing ? 0.08 : 0.32,
+            ease: [0.22, 1, 0.36, 1],
+          }}
         >
           <div
             className={`photo-viewer-track${photos.length === 1 ? " is-single" : ""}${slideAnimating ? " is-animating" : ""}`}
@@ -381,14 +600,46 @@ export function PhotoViewer({
                 className={`photo-viewer-slide${position === 0 ? " is-current" : ""}`}
                 key={`${visiblePhoto.id}-${position}`}
               >
-                <img
-                  alt={visiblePhoto.alt}
-                  draggable={false}
-                  src={visiblePhoto.src}
+                <div
+                  className="photo-viewer-image-stack"
                   style={position === 0
                     ? { transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }
                     : undefined}
-                />
+                >
+                  <img
+                    alt=""
+                    aria-hidden="true"
+                    className="photo-viewer-placeholder"
+                    draggable={false}
+                    src={visiblePhoto.thumbnailSrc}
+                  />
+                  <img
+                    alt={visiblePhoto.alt}
+                    className={`photo-viewer-preview${previewReady[visiblePhoto.id] ? " is-ready" : ""}`}
+                    draggable={false}
+                    onLoad={(event) => {
+                      const image = event.currentTarget;
+                      void image.decode().catch(() => undefined).finally(() => {
+                        setPreviewReady((current) => ({ ...current, [visiblePhoto.id]: true }));
+                      });
+                    }}
+                    src={visiblePhoto.src}
+                  />
+                  {position === 0 && hdUrls[visiblePhoto.id] ? (
+                    <img
+                      alt={visiblePhoto.alt}
+                      className={`photo-viewer-hd-image${hdReady[visiblePhoto.id] ? " is-ready" : ""}`}
+                      draggable={false}
+                      onLoad={(event) => {
+                        const image = event.currentTarget;
+                        void image.decode().catch(() => undefined).finally(() => {
+                          setHdReady((current) => ({ ...current, [visiblePhoto.id]: true }));
+                        });
+                      }}
+                      src={hdUrls[visiblePhoto.id]}
+                    />
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -406,16 +657,65 @@ export function PhotoViewer({
         ) : null}
 
         <div className="photo-viewer-desktop-actions" data-viewer-control>
-          <a aria-label="下载图片" download={photo.alt} href={photo.src}><Download aria-hidden="true" /></a>
+          <a aria-label="下载图片" download={photo.alt} href={`${photo.hdSrc}?download=1`}><Download aria-hidden="true" /></a>
           <button aria-label="关闭照片查看器" onClick={requestClose} type="button"><X aria-hidden="true" /></button>
         </div>
         <div className="photo-viewer-zoom" aria-label="照片缩放控制" data-viewer-control>
-          <button aria-label="缩小" disabled={scale <= 1} onClick={() => zoomBy(-0.5)} type="button"><Minus aria-hidden="true" /></button>
-          <span>{Math.round(scale * 100)}%</span>
-          <button aria-label="放大" disabled={scale >= 4} onClick={() => zoomBy(0.5)} type="button"><Plus aria-hidden="true" /></button>
+          <button aria-label="缩小" disabled={scale <= minScale} onClick={() => zoomBy(-0.5)} type="button"><Minus aria-hidden="true" /></button>
+          <span>{Math.round(scale * DESKTOP_FIT_PERCENT)}%</span>
+          <button aria-label="放大" disabled={scale >= maxScale} onClick={() => zoomBy(0.5)} type="button"><Plus aria-hidden="true" /></button>
         </div>
         {body ? <p className={`photo-viewer-caption${scale > 1.02 ? " is-hidden" : ""}`}>{body}</p> : null}
+        {!hdUrl ? (
+          <button
+            className="photo-viewer-hd"
+            data-viewer-control
+            disabled={hdProgress !== null}
+            onClick={loadHd}
+            type="button"
+          >
+            {hdProgress === null ? "查看原图" : `正在加载原图 ${hdProgress}%`}
+          </button>
+        ) : null}
+        {hdProgress !== null ? (
+          <div className="photo-viewer-hd-progress" data-viewer-control>
+            <span
+              aria-label={`原图加载进度 ${hdProgress}%`}
+              style={{ background: `conic-gradient(#f4f0e7 ${hdProgress * 3.6}deg, rgba(244, 240, 231, 0.2) 0deg)` }}
+            />
+            <strong>{hdProgress}%</strong>
+          </div>
+        ) : null}
       </div>
+
+      {closeVisual ? (
+        <motion.div
+          animate={{
+            opacity: [1, 1, 0],
+            scale: closeVisual.scale,
+            x: closeVisual.x,
+            y: closeVisual.y,
+          }}
+          className="photo-viewer-close-visual"
+          initial={{
+            height: closeVisual.from.height,
+            left: closeVisual.from.left,
+            opacity: 1,
+            scale: 1,
+            top: closeVisual.from.top,
+            width: closeVisual.from.width,
+            x: 0,
+            y: 0,
+          }}
+          transition={{
+            duration: reducedMotion ? 0 : CLOSE_DURATION / 1000,
+            ease: [0.22, 1, 0.36, 1],
+            opacity: { times: [0, 0.74, 1] },
+          }}
+        >
+          <img alt="" aria-hidden="true" draggable={false} src={closeVisual.src} />
+        </motion.div>
+      ) : null}
 
       <AnimatePresence>
         {sheetOpen ? (
@@ -435,7 +735,8 @@ export function PhotoViewer({
               onClick={(event) => event.stopPropagation()}
               transition={{ duration: reducedMotion ? 0 : 0.36, ease: [0.22, 1, 0.36, 1] }}
             >
-              <a download={photo.alt} href={photo.src}><Download aria-hidden="true" /><span>下载原图</span></a>
+              {!hdUrl ? <button onClick={loadHd} type="button">查看原图</button> : null}
+              <a download={photo.alt} href={`${photo.hdSrc}?download=1`}><Download aria-hidden="true" /><span>下载原图</span></a>
               <button onClick={() => setSheetOpen(false)} type="button">取消</button>
             </motion.div>
           </motion.div>

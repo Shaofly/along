@@ -2,6 +2,7 @@ export type UploadedMedia = {
   id: string;
   originalName: string;
   mimeType: string;
+  status: "processing" | "ready";
 };
 
 export type UploadProgress = {
@@ -67,6 +68,7 @@ function uploadOne(
         id?: string;
         name?: string;
         mimeType?: string;
+        status?: "processing" | "ready";
         error?: string;
       };
       if (request.status < 200 || request.status >= 300 || !result.id) {
@@ -77,6 +79,7 @@ function uploadOne(
         id: result.id,
         originalName: result.name ?? file.name,
         mimeType: result.mimeType ?? file.type,
+        status: result.status ?? "processing",
       });
     });
     request.addEventListener("error", () => reject(new Error("网络中断，图片上传失败。")));

@@ -56,6 +56,10 @@ export async function getVisiblePosts(
   );
   const visibilityCondition = or(personalCondition, ...circleConditions);
   if (!visibilityCondition) return [];
+  const publicationCondition = or(
+    eq(posts.publicationStatus, "published"),
+    eq(posts.authorId, viewerId),
+  );
 
   const rows = await db
     .select({
@@ -66,6 +70,8 @@ export async function getVisiblePosts(
       lastEditedById: posts.lastEditedById,
       createdAt: posts.createdAt,
       updatedAt: posts.updatedAt,
+      publicationStatus: posts.publicationStatus,
+      publicationError: posts.publicationError,
       authorId: user.id,
       authorName: user.name,
       authorImage: user.image,
@@ -79,6 +85,7 @@ export async function getVisiblePosts(
     .where(
       and(
         visibilityCondition,
+        publicationCondition,
         options.authorId ? eq(posts.authorId, options.authorId) : undefined,
         options.circleId ? eq(posts.circleId, options.circleId) : undefined,
       ),
@@ -161,6 +168,8 @@ export async function getVisiblePosts(
       body,
       visibility: row.visibility,
       managementMode: row.managementMode,
+      publicationStatus: row.publicationStatus,
+      publicationError: row.publicationError,
       createdAt: row.createdAt.toISOString(),
       updatedAt: updatedAt.toISOString(),
       author: { id: row.authorId, name: row.authorName, image: row.authorImage },
@@ -185,6 +194,7 @@ export async function canViewPost(viewerId: string, postId: string) {
       authorId: posts.authorId,
       circleId: posts.circleId,
       visibility: posts.visibility,
+      publicationStatus: posts.publicationStatus,
       createdAt: posts.createdAt,
     })
     .from(posts)
@@ -192,6 +202,9 @@ export async function canViewPost(viewerId: string, postId: string) {
     .limit(1);
   if (!post) return false;
 
+  if (post.authorId !== viewerId && post.publicationStatus !== "published") {
+    return false;
+  }
   if (post.circleId) {
     const periods = await getCirclePeriods(viewerId, post.circleId);
     return periods.some((period) => periodCanSeeCreatedAt(period, post.createdAt));

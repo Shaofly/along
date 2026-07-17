@@ -613,21 +613,33 @@ export function SocialHome({
           </AnimatedReveal>
         </div>
 
-        <section className="home-circle-section home-summary-section">
-          <div className="home-section-heading">
-            <SoftReveal><h2>圈子</h2></SoftReveal>
-            <Link href="/circles">查看全部</Link>
-          </div>
-          {circleList}
-        </section>
+        <div className="home-side-sections">
+          <section className="home-circle-section home-summary-section">
+            <div className="home-section-heading">
+              <SoftReveal><h2>圈子</h2></SoftReveal>
+              <Link href="/circles">查看全部</Link>
+            </div>
+            {circleList}
+          </section>
 
-        <section className="home-friend-section home-summary-section">
-          <div className="home-section-heading">
-            <SoftReveal><h2>朋友</h2></SoftReveal>
-            <Link href="/friends">查看全部</Link>
-          </div>
-          {friendList}
-        </section>
+          <section className="home-friend-section home-summary-section">
+            <div className="home-section-heading">
+              <SoftReveal><h2>朋友</h2></SoftReveal>
+              <Link href="/friends">查看全部</Link>
+            </div>
+            {friendList}
+          </section>
+
+          <section className="home-capsule-section home-summary-section home-feature-section">
+            <div className="home-section-heading"><SoftReveal><h2>时光胶囊</h2></SoftReveal></div>
+            <div className="home-feature-placeholder"><Hourglass aria-hidden="true" size={20} /><span>还没有封存的胶囊</span></div>
+          </section>
+
+          <section className="home-map-section home-summary-section home-feature-section">
+            <div className="home-section-heading"><SoftReveal><h2>足迹地图</h2></SoftReveal></div>
+            <div className="home-feature-placeholder"><MapPinned aria-hidden="true" size={20} /><span>还没有点亮的足迹</span></div>
+          </section>
+        </div>
 
         <section className="latest-section" ref={latestSectionRef}>
           <div className="section-line-heading">
@@ -635,16 +647,6 @@ export function SocialHome({
             <Link href="/feed">查看全部</Link>
           </div>
           {latestContent}
-        </section>
-
-        <section className="home-capsule-section home-summary-section home-feature-section">
-          <div className="home-section-heading"><SoftReveal><h2>时光胶囊</h2></SoftReveal></div>
-          <div className="home-feature-placeholder"><Hourglass aria-hidden="true" size={20} /><span>还没有封存的胶囊</span></div>
-        </section>
-
-        <section className="home-map-section home-summary-section home-feature-section">
-          <div className="home-section-heading"><SoftReveal><h2>足迹地图</h2></SoftReveal></div>
-          <div className="home-feature-placeholder"><MapPinned aria-hidden="true" size={20} /><span>还没有点亮的足迹</span></div>
         </section>
       </div>
 

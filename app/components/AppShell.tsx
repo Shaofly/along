@@ -1,10 +1,10 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { animate, AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { Bell, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { MouseEvent, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
 import { authClient } from "@/lib/auth-client";
@@ -19,6 +19,7 @@ export type ShellUser = {
 };
 
 type PrimaryRoute = "home" | "circles" | "friends" | "profile";
+type DrawerGestureMode = "pending" | "horizontal";
 
 const primaryOptions = [
   { value: "home", label: "首页" },
@@ -39,6 +40,10 @@ function routeFromPath(pathname: string, userId: string): PrimaryRoute {
   if (pathname.startsWith("/friends") || pathname.startsWith("/invites")) return "friends";
   if (pathname === `/profile/${userId}` || pathname === "/profile") return "profile";
   return "home";
+}
+
+function drawerWidth() {
+  return Math.min(window.innerWidth * 0.84, 340);
 }
 
 function Avatar({ user }: { user: ShellUser }) {
@@ -64,7 +69,19 @@ export function AppShell({
   const reducedMotion = useReducedMotion();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const gestureStart = useRef<{ x: number; y: number } | null>(null);
+  const stageX = useMotionValue(0);
+  const gestureStart = useRef<{
+    captureTarget: HTMLDivElement;
+    lastTime: number;
+    lastX: number;
+    mode: DrawerGestureMode;
+    pointerId: number;
+    stageX: number;
+    velocityX: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const suppressStageClick = useRef(false);
   const navigationTimer = useRef<number | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<{
     fromPath: string;
@@ -75,25 +92,55 @@ export function AppShell({
     : routeFromPath(pathname, user.id);
 
   useEffect(() => {
-    const onPopState = () => setDrawerOpen(false);
+    const onPopState = () => {
+      setDrawerOpen(false);
+      snapStage(false);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+    // stageX is stable for the lifetime of this shell.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => () => {
     if (navigationTimer.current) window.clearTimeout(navigationTimer.current);
   }, []);
 
+  useEffect(() => {
+    const onResize = () => {
+      if (drawerOpen && !gestureStart.current) stageX.set(drawerWidth());
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [drawerOpen, stageX]);
+
+  function snapStage(open: boolean) {
+    const target = open ? drawerWidth() : 0;
+    stageX.stop();
+    if (reducedMotion) {
+      stageX.set(target);
+      return;
+    }
+    animate(stageX, target, {
+      type: "spring",
+      stiffness: 380,
+      damping: 34,
+      mass: 0.82,
+    });
+  }
+
   function openDrawer() {
-    if (drawerOpen) return;
-    window.history.pushState({ alongDrawer: true }, "", window.location.href);
-    setDrawerOpen(true);
+    if (!drawerOpen) {
+      window.history.pushState({ alongDrawer: true }, "", window.location.href);
+      setDrawerOpen(true);
+    }
+    snapStage(true);
   }
 
   function closeDrawer() {
-    if (!drawerOpen) return;
+    setDrawerOpen(false);
+    snapStage(false);
     if (window.history.state?.alongDrawer) window.history.back();
-    else setDrawerOpen(false);
   }
 
   function navigate(value: PrimaryRoute) {
@@ -110,19 +157,107 @@ export function AppShell({
     navigationTimer.current = window.setTimeout(() => router.push(href), 150);
   }
 
-  function beginOpenGesture(event: PointerEvent<HTMLDivElement>) {
-    if (drawerOpen || event.clientX < 18 || event.clientX > 64) return;
-    if ((event.target as HTMLElement).closest("a, button, input, textarea, select, [data-no-drawer-gesture]")) return;
-    gestureStart.current = { x: event.clientX, y: event.clientY };
+  function beginDrawerGesture(event: PointerEvent<HTMLDivElement>) {
+    if (!window.matchMedia("(max-width: 700px)").matches || !event.isPrimary) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable='true'], [data-no-drawer-gesture]")) return;
+    stageX.stop();
+    gestureStart.current = {
+      captureTarget: event.currentTarget,
+      lastTime: event.timeStamp,
+      lastX: event.clientX,
+      mode: "pending",
+      pointerId: event.pointerId,
+      stageX: stageX.get(),
+      velocityX: 0,
+      x: event.clientX,
+      y: event.clientY,
+    };
   }
 
-  function finishOpenGesture(event: PointerEvent<HTMLDivElement>) {
+  function moveDrawerGesture(event: PointerEvent<HTMLDivElement>) {
+    const gesture = gestureStart.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const dx = event.clientX - gesture.x;
+    const dy = event.clientY - gesture.y;
+
+    if (gesture.mode === "pending") {
+      if (Math.hypot(dx, dy) < 9) return;
+      if (Math.abs(dy) >= Math.abs(dx) * 0.9) {
+        gestureStart.current = null;
+        if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+          gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+        }
+        snapStage(drawerOpen);
+        return;
+      }
+      gesture.mode = "horizontal";
+      gesture.captureTarget.setPointerCapture(gesture.pointerId);
+      suppressStageClick.current = true;
+    }
+
+    const elapsed = Math.max(1, event.timeStamp - gesture.lastTime);
+    gesture.velocityX = (event.clientX - gesture.lastX) / elapsed;
+    gesture.lastX = event.clientX;
+    gesture.lastTime = event.timeStamp;
+
+    const width = drawerWidth();
+    const rawX = gesture.stageX + dx;
+    const resistedX = rawX < 0
+      ? rawX * 0.14
+      : rawX > width
+        ? width + (rawX - width) * 0.14
+        : rawX;
+    stageX.set(resistedX);
+  }
+
+  function finishDrawerGesture() {
     const start = gestureStart.current;
     gestureStart.current = null;
     if (!start) return;
-    const dx = event.clientX - start.x;
-    const dy = Math.abs(event.clientY - start.y);
-    if (dx > 80 && dx > dy * 1.5) openDrawer();
+    if (start.captureTarget.hasPointerCapture(start.pointerId)) {
+      start.captureTarget.releasePointerCapture(start.pointerId);
+    }
+    if (start.mode !== "horizontal") {
+      snapStage(drawerOpen);
+      return;
+    }
+
+    const width = drawerWidth();
+    const currentX = stageX.get();
+    const shouldOpen = start.velocityX > 0.48
+      || (start.velocityX >= -0.48 && currentX > width * 0.5);
+    window.setTimeout(() => {
+      suppressStageClick.current = false;
+    }, 0);
+    if (shouldOpen) openDrawer();
+    else closeDrawer();
+  }
+
+  function cancelDrawerGesture(event: PointerEvent<HTMLDivElement>) {
+    const start = gestureStart.current;
+    gestureStart.current = null;
+    if (start?.captureTarget.hasPointerCapture(event.pointerId)) {
+      start.captureTarget.releasePointerCapture(event.pointerId);
+    }
+    suppressStageClick.current = false;
+    snapStage(drawerOpen);
+  }
+
+  function handleShellClickCapture(event: MouseEvent<HTMLDivElement>) {
+    if (suppressStageClick.current) {
+      suppressStageClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  function handleStageClick() {
+    if (suppressStageClick.current) {
+      suppressStageClick.current = false;
+      return;
+    }
+    if (drawerOpen) closeDrawer();
   }
 
   async function signOut() {
@@ -131,7 +266,14 @@ export function AppShell({
   }
 
   return (
-    <div className={`app-shell${drawerOpen ? " drawer-open" : ""}`}>
+    <div
+      className={`app-shell${drawerOpen ? " drawer-open" : ""}`}
+      onClickCapture={handleShellClickCapture}
+      onPointerCancel={cancelDrawerGesture}
+      onPointerDown={beginDrawerGesture}
+      onPointerMove={moveDrawerGesture}
+      onPointerUp={finishDrawerGesture}
+    >
       <aside className="mobile-drawer" aria-hidden={!drawerOpen}>
         <div className="drawer-profile">
           <div className="drawer-avatar"><Avatar user={user} /></div>
@@ -158,12 +300,9 @@ export function AppShell({
       </aside>
 
       <motion.div
-        animate={{ x: drawerOpen ? "min(84vw, 340px)" : 0 }}
         className="app-shell-stage"
-        onClick={drawerOpen ? closeDrawer : undefined}
-        onPointerDown={beginOpenGesture}
-        onPointerUp={finishOpenGesture}
-        transition={reducedMotion ? { duration: 0.01 } : { type: "spring", stiffness: 380, damping: 34, mass: 0.82 }}
+        onClick={handleStageClick}
+        style={{ x: stageX }}
       >
         <header className="global-header" onClick={(event) => drawerOpen && event.stopPropagation()}>
           <div className="global-header-left">

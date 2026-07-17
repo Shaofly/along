@@ -223,6 +223,7 @@ export function SegmentedControl<Value extends string>({
     <div
       aria-label={ariaLabel}
       className={`segmented-control${dragGeometry ? " is-dragging" : ""}${className ? ` ${className}` : ""}`}
+      data-no-drawer-gesture
       onPointerCancel={cancelDrag}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

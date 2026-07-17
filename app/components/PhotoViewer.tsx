@@ -57,6 +57,15 @@ const DESKTOP_MAX_SCALE = 10;
 const DESKTOP_FIT_PERCENT = 50;
 const SLIDE_DURATION = 280;
 const CLOSE_DURATION = 280;
+const HORIZONTAL_GESTURE_RATIO = 1.6;
+const DISMISS_DISTANCE = 104;
+const DISMISS_VELOCITY = 0.55;
+const DISMISS_MIN_TRAVEL = 220;
+const DISMISS_SCALE_REDUCTION = 0.24;
+const DISMISS_BACKDROP_REDUCTION = 0.88;
+const DESKTOP_STAGE_INSET_RATIO = 0.065;
+const DESKTOP_STAGE_INSET_MIN = 36;
+const DESKTOP_STAGE_INSET_MAX = 52;
 
 function distance(first: Point, second: Point) {
   return Math.hypot(second.x - first.x, second.y - first.y);
@@ -70,6 +79,27 @@ function rubberScale(value: number, minScale: number, maxScale: number) {
     return Math.min(maxScale * 1.12, maxScale + (value - maxScale) * 0.22);
   }
   return value;
+}
+
+function isHorizontalGesture(dx: number, dy: number) {
+  return Math.abs(dx) > Math.abs(dy) * HORIZONTAL_GESTURE_RATIO;
+}
+
+function dismissVisual(dx: number, dy: number) {
+  const dragDistance = Math.hypot(dx, dy);
+  const viewportDistance = Math.min(window.innerWidth, window.innerHeight) * 0.52;
+  const progress = Math.min(1, dragDistance / Math.max(DISMISS_MIN_TRAVEL, viewportDistance));
+  return {
+    backdropOpacity: 1 - progress * DISMISS_BACKDROP_REDUCTION,
+    offset: { x: dx, y: dy },
+    scale: 1 - progress * DISMISS_SCALE_REDUCTION,
+  };
+}
+
+function shouldDismiss(dx: number, dy: number, elapsed: number) {
+  const dragDistance = Math.hypot(dx, dy);
+  const dragVelocity = dragDistance / Math.max(1, elapsed);
+  return dragDistance > DISMISS_DISTANCE || dragVelocity > DISMISS_VELOCITY;
 }
 
 function visibleImageRect(image: HTMLImageElement): ViewerRect {
@@ -88,6 +118,44 @@ function visibleImageRect(image: HTMLImageElement): ViewerRect {
     left: box.left + (box.width - width) / 2,
     top: box.top + (box.height - height) / 2,
     width,
+  };
+}
+
+function entranceTransform(source: DOMRect | null, reducedMotion: boolean | null) {
+  if (!source || typeof window === "undefined" || reducedMotion) {
+    return { opacity: 1, scale: 1, x: 0, y: 0 };
+  }
+
+  const mobile = window.matchMedia("(max-width: 700px)").matches;
+  const shellWidth = mobile
+    ? window.innerWidth
+    : Math.min(window.innerWidth * 0.76, 1080);
+  const shellHeight = mobile
+    ? window.innerHeight
+    : Math.min(window.innerHeight * 0.74, 760);
+  const trackInset = mobile
+    ? 0
+    : Math.max(
+      DESKTOP_STAGE_INSET_MIN,
+      Math.min(shellHeight * DESKTOP_STAGE_INSET_RATIO, DESKTOP_STAGE_INSET_MAX),
+    );
+  const availableWidth = Math.max(1, shellWidth - trackInset * 2);
+  const availableHeight = Math.max(1, shellHeight - trackInset * 2);
+  const fit = Math.min(
+    availableWidth / Math.max(1, source.width),
+    availableHeight / Math.max(1, source.height),
+  );
+  const targetWidth = source.width * fit;
+  const targetHeight = source.height * fit;
+
+  return {
+    opacity: 1,
+    scale: Math.max(0.04, Math.min(
+      source.width / Math.max(1, targetWidth),
+      source.height / Math.max(1, targetHeight),
+    )),
+    x: source.left + source.width / 2 - window.innerWidth / 2,
+    y: source.top + source.height / 2 - window.innerHeight / 2,
   };
 }
 
@@ -116,6 +184,10 @@ export function PhotoViewer({
   const [backdropOpacity, setBackdropOpacity] = useState(1);
   const [isMobile, setIsMobile] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [isDismissing, setIsDismissing] = useState(false);
+  const [entranceComplete, setEntranceComplete] = useState(
+    Boolean(reducedMotion || !originRect),
+  );
   const [closeVisual, setCloseVisual] = useState<CloseVisual | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [previewReady, setPreviewReady] = useState<Record<string, boolean>>({});
@@ -125,6 +197,7 @@ export function PhotoViewer({
   const hdUrlsRef = useRef<Record<string, string>>({});
   const hdRequestRef = useRef<XMLHttpRequest | null>(null);
   const clickGuardCleanupRef = useRef<(() => void) | null>(null);
+  const dismissResetTimerRef = useRef(0);
   const pointers = useRef(new Map<number, Point>());
   const gesture = useRef<{
     mode: GestureMode;
@@ -135,6 +208,7 @@ export function PhotoViewer({
     pinchDistance: number;
   } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const trackViewportRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef(scale);
   const offsetRef = useRef(offset);
   const pendingSlideDirection = useRef<-1 | 1 | null>(null);
@@ -159,6 +233,7 @@ export function PhotoViewer({
   useEffect(() => () => {
     hdRequestRef.current?.abort();
     window.clearTimeout(closeTimerRef.current);
+    window.clearTimeout(dismissResetTimerRef.current);
     clickGuardCleanupRef.current?.();
     Object.values(hdUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
   }, []);
@@ -275,10 +350,23 @@ export function PhotoViewer({
   }, [closeFromHistory, historyToken]);
 
   const resetImage = useCallback(() => {
+    window.clearTimeout(dismissResetTimerRef.current);
     setScale(1);
     setOffset({ x: 0, y: 0 });
     setBackdropOpacity(1);
+    setIsDismissing(false);
   }, []);
+
+  const reboundDismiss = useCallback(() => {
+    window.clearTimeout(dismissResetTimerRef.current);
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+    setBackdropOpacity(1);
+    dismissResetTimerRef.current = window.setTimeout(
+      () => setIsDismissing(false),
+      reducedMotion ? 0 : SLIDE_DURATION,
+    );
+  }, [reducedMotion]);
 
   const finishSlideImmediately = useCallback((direction: -1 | 1) => {
     hdRequestRef.current?.abort();
@@ -297,7 +385,7 @@ export function PhotoViewer({
       finishSlideImmediately(direction);
       return;
     }
-    const width = stageRef.current?.clientWidth ?? window.innerWidth;
+    const width = trackViewportRef.current?.clientWidth ?? window.innerWidth;
     pendingSlideDirection.current = direction;
     setSlideAnimating(true);
     setSlideX(-direction * width);
@@ -327,7 +415,7 @@ export function PhotoViewer({
   }, [maxScale, minScale, movePhoto, requestClose]);
 
   const clampPan = useCallback((point: Point, currentScale: number) => {
-    const rect = stageRef.current?.getBoundingClientRect();
+    const rect = trackViewportRef.current?.getBoundingClientRect();
     if (!rect) return point;
     const boundX = rect.width * (currentScale - 1) * 0.5;
     const boundY = rect.height * (currentScale - 1) * 0.5;
@@ -340,6 +428,8 @@ export function PhotoViewer({
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if ((event.target as Element).closest("button, a, [data-viewer-control]")) return;
     if (pendingSlideDirection.current) return;
+    window.clearTimeout(dismissResetTimerRef.current);
+    setIsDismissing(false);
     event.currentTarget.setPointerCapture(event.pointerId);
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
@@ -388,7 +478,9 @@ export function PhotoViewer({
     const dx = current.x - gesture.current.start.x;
     const dy = current.y - gesture.current.start.y;
     if (gesture.current.mode === "pending" && Math.hypot(dx, dy) > 8) {
-      gesture.current.mode = Math.abs(dx) > Math.abs(dy) * 1.15 ? "horizontal" : "dismiss";
+      const horizontal = photos.length > 1 && isHorizontalGesture(dx, dy);
+      gesture.current.mode = horizontal ? "horizontal" : "dismiss";
+      if (!horizontal) setIsDismissing(true);
     }
 
     if (gesture.current.mode === "pan") {
@@ -399,10 +491,10 @@ export function PhotoViewer({
     } else if (gesture.current.mode === "horizontal" && photos.length > 1) {
       setSlideX(dx);
     } else if (gesture.current.mode === "dismiss") {
-      const progress = Math.min(1, Math.abs(dy) / Math.max(220, window.innerHeight * 0.42));
-      setOffset({ x: dx * 0.16, y: dy });
-      setScale(1 - progress * 0.18);
-      setBackdropOpacity(1 - progress * 0.72);
+      const visual = dismissVisual(dx, dy);
+      setOffset(visual.offset);
+      setScale(visual.scale);
+      setBackdropOpacity(visual.backdropOpacity);
     }
   }
 
@@ -429,7 +521,6 @@ export function PhotoViewer({
     const dy = point.y - activeGesture.start.y;
     const elapsed = Math.max(1, performance.now() - activeGesture.startedAt);
     const velocityX = dx / elapsed;
-    const velocityY = dy / elapsed;
 
     if (activeGesture.mode === "pinch") {
       const snappedScale = Math.max(
@@ -442,7 +533,7 @@ export function PhotoViewer({
     } else if (activeGesture.mode === "horizontal" && photos.length > 1) {
       const direction = dx < 0 ? 1 : -1;
       if (Math.abs(dx) > 64 || Math.abs(velocityX) > 0.45) {
-        const width = stageRef.current?.clientWidth ?? window.innerWidth;
+        const width = trackViewportRef.current?.clientWidth ?? window.innerWidth;
         pendingSlideDirection.current = direction;
         setSlideAnimating(true);
         setSlideX(-direction * width);
@@ -453,13 +544,13 @@ export function PhotoViewer({
       }
     } else if (activeGesture.mode === "dismiss") {
       setImageTransitioning(true);
-      if (Math.abs(dy) > 92 || Math.abs(velocityY) > 0.55) {
+      if (shouldDismiss(dx, dy, elapsed)) {
         event.preventDefault();
         event.stopPropagation();
         guardNextDocumentClick();
         animateClose(false);
       } else {
-        resetImage();
+        reboundDismiss();
       }
     } else if (activeGesture.mode === "pending" && Math.hypot(dx, dy) < 7 && elapsed < 360) {
       const isMobile = window.matchMedia("(max-width: 700px)").matches;
@@ -524,12 +615,10 @@ export function PhotoViewer({
     request.send();
   }
 
-  const entrance = useMemo(() => {
-    if (!originRect || typeof window === "undefined" || reducedMotion) return { x: 0, y: 0, scale: 1 };
-    const x = originRect.left + originRect.width / 2 - window.innerWidth / 2;
-    const y = originRect.top + originRect.height / 2 - window.innerHeight / 2;
-    return { x, y, scale: Math.max(0.18, Math.min(0.72, originRect.width / window.innerWidth)) };
-  }, [originRect, reducedMotion]);
+  const entrance = useMemo(
+    () => entranceTransform(originRect, reducedMotion),
+    [originRect, reducedMotion],
+  );
 
   const visiblePhotos = useMemo(() => {
     if (photos.length === 1) return [{ position: 0, photo: photos[0] }];
@@ -546,7 +635,8 @@ export function PhotoViewer({
       animate={{ backgroundColor: `rgba(24, 28, 26, ${0.78 * backdropOpacity})` }}
       aria-label="照片查看器"
       aria-modal="true"
-      className={`photo-viewer${isClosing ? " is-closing" : ""}`}
+      className={`photo-viewer${isClosing ? " is-closing" : ""}${isDismissing ? " is-dismissing" : ""}`}
+      data-no-drawer-gesture
       initial={{ backgroundColor: "rgba(24, 28, 26, 0)" }}
       onPointerCancel={onPointerUp}
       onPointerDown={onPointerDown}
@@ -554,7 +644,7 @@ export function PhotoViewer({
       onPointerUp={onPointerUp}
       onWheel={onWheel}
       role="dialog"
-      transition={{ duration: reducedMotion ? 0 : 0.22 }}
+      transition={{ duration: reducedMotion || isDismissing ? 0 : 0.22 }}
     >
       <header className="photo-viewer-mobile-header" data-viewer-control>
         <span className="photo-viewer-count">{index + 1} / {photos.length}</span>
@@ -572,76 +662,88 @@ export function PhotoViewer({
       <div className="photo-viewer-shell">
         <motion.div
           animate={{
+            backgroundColor: `rgba(15, 19, 17, ${0.72 * backdropOpacity})`,
             opacity: isClosing ? 0 : 1,
-            scale: 1,
-            x: 0,
-            y: 0,
           }}
           className={`photo-viewer-stage-wrap${imageTransitioning ? " is-image-transitioning" : ""}`}
-          initial={{ opacity: reducedMotion ? 1 : 0.45, ...entrance }}
+          initial={{ backgroundColor: "rgba(15, 19, 17, 0)", opacity: 1 }}
           ref={stageRef}
-          style={{ backgroundColor: `rgba(15, 19, 17, ${0.72 * backdropOpacity})` }}
           transition={{
-            duration: reducedMotion ? 0 : isClosing ? 0.08 : 0.32,
+            duration: reducedMotion || isDismissing ? 0 : isClosing ? 0.08 : 0.22,
             ease: [0.22, 1, 0.36, 1],
           }}
         >
-          <div
-            className={`photo-viewer-track${photos.length === 1 ? " is-single" : ""}${slideAnimating ? " is-animating" : ""}`}
-            onTransitionEnd={onTrackTransitionEnd}
-            style={{
-              transform: photos.length > 1
-                ? `translate3d(calc(-33.333333% + ${slideX}px), 0, 0)`
-                : "translate3d(0, 0, 0)",
-            }}
-          >
-            {visiblePhotos.map(({ position, photo: visiblePhoto }) => (
-              <div
-                className={`photo-viewer-slide${position === 0 ? " is-current" : ""}`}
-                key={`${visiblePhoto.id}-${position}`}
-              >
+          <div className="photo-viewer-track-viewport" ref={trackViewportRef}>
+            <div
+              className={`photo-viewer-track${photos.length === 1 ? " is-single" : ""}${slideAnimating ? " is-animating" : ""}`}
+              onTransitionEnd={onTrackTransitionEnd}
+              style={{
+                transform: photos.length > 1
+                  ? `translate3d(calc(-33.333333% + ${slideX}px), 0, 0)`
+                  : "translate3d(0, 0, 0)",
+              }}
+            >
+              {visiblePhotos.map(({ position, photo: visiblePhoto }) => (
                 <div
-                  className="photo-viewer-image-stack"
-                  style={position === 0
-                    ? { transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }
-                    : undefined}
+                  className={`photo-viewer-slide${position === 0 ? " is-current" : ""}`}
+                  key={`${visiblePhoto.id}-${position}`}
                 >
-                  <img
-                    alt=""
-                    aria-hidden="true"
-                    className="photo-viewer-placeholder"
-                    draggable={false}
-                    src={visiblePhoto.thumbnailSrc}
-                  />
-                  <img
-                    alt={visiblePhoto.alt}
-                    className={`photo-viewer-preview${previewReady[visiblePhoto.id] ? " is-ready" : ""}`}
-                    draggable={false}
-                    onLoad={(event) => {
-                      const image = event.currentTarget;
-                      void image.decode().catch(() => undefined).finally(() => {
-                        setPreviewReady((current) => ({ ...current, [visiblePhoto.id]: true }));
-                      });
+                  <motion.div
+                    animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                    className="photo-viewer-image-entrance"
+                    initial={position === 0 && !entranceComplete ? entrance : false}
+                    onAnimationComplete={() => {
+                      if (position === 0 && !entranceComplete) setEntranceComplete(true);
                     }}
-                    src={visiblePhoto.src}
-                  />
-                  {position === 0 && hdUrls[visiblePhoto.id] ? (
-                    <img
-                      alt={visiblePhoto.alt}
-                      className={`photo-viewer-hd-image${hdReady[visiblePhoto.id] ? " is-ready" : ""}`}
-                      draggable={false}
-                      onLoad={(event) => {
-                        const image = event.currentTarget;
-                        void image.decode().catch(() => undefined).finally(() => {
-                          setHdReady((current) => ({ ...current, [visiblePhoto.id]: true }));
-                        });
-                      }}
-                      src={hdUrls[visiblePhoto.id]}
-                    />
-                  ) : null}
+                    transition={{
+                      duration: reducedMotion || entranceComplete ? 0 : 0.32,
+                      ease: [0.22, 1, 0.36, 1],
+                    }}
+                  >
+                    <div
+                      className="photo-viewer-image-stack"
+                      style={position === 0
+                        ? { transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }
+                        : undefined}
+                    >
+                      <img
+                        alt=""
+                        aria-hidden="true"
+                        className="photo-viewer-placeholder"
+                        draggable={false}
+                        src={visiblePhoto.thumbnailSrc}
+                      />
+                      <img
+                        alt={visiblePhoto.alt}
+                        className={`photo-viewer-preview${previewReady[visiblePhoto.id] ? " is-ready" : ""}`}
+                        draggable={false}
+                        onLoad={(event) => {
+                          const image = event.currentTarget;
+                          void image.decode().catch(() => undefined).finally(() => {
+                            setPreviewReady((current) => ({ ...current, [visiblePhoto.id]: true }));
+                          });
+                        }}
+                        src={visiblePhoto.src}
+                      />
+                      {position === 0 && hdUrls[visiblePhoto.id] ? (
+                        <img
+                          alt={visiblePhoto.alt}
+                          className={`photo-viewer-hd-image${hdReady[visiblePhoto.id] ? " is-ready" : ""}`}
+                          draggable={false}
+                          onLoad={(event) => {
+                            const image = event.currentTarget;
+                            void image.decode().catch(() => undefined).finally(() => {
+                              setHdReady((current) => ({ ...current, [visiblePhoto.id]: true }));
+                            });
+                          }}
+                          src={hdUrls[visiblePhoto.id]}
+                        />
+                      ) : null}
+                    </div>
+                  </motion.div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </motion.div>
 
@@ -665,7 +767,7 @@ export function PhotoViewer({
           <span>{Math.round(scale * DESKTOP_FIT_PERCENT)}%</span>
           <button aria-label="放大" disabled={scale >= maxScale} onClick={() => zoomBy(0.5)} type="button"><Plus aria-hidden="true" /></button>
         </div>
-        {body ? <p className={`photo-viewer-caption${scale > 1.02 ? " is-hidden" : ""}`}>{body}</p> : null}
+        {body ? <p className={`photo-viewer-post-context${scale > 1.02 ? " is-hidden" : ""}`}>{body}</p> : null}
         {!hdUrl ? (
           <button
             className="photo-viewer-hd"

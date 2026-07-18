@@ -2,6 +2,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
+import { AppShell } from "@/app/components/AppShell";
 import { auth } from "@/lib/auth";
 import { getCircleDetail } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
@@ -28,29 +29,52 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
   if (!circle || !currentUser) notFound();
   const activeMembers = circle.members.filter((member) => member.isActive);
   const formerMembers = circle.members.filter((member) => !member.isActive);
+  const archivedMembers = circle.isArchived ? circle.members : [];
 
   return (
     <AppShell pageClassName="circle-members-page" user={currentUser}>
       <header className="circle-detail-header">
         <Link href={`/circles/${circle.id}`} aria-label="返回圈子">←</Link>
         <div><span>成员关系</span><strong>{circle.name}</strong></div>
-        <span>{activeMembers.length} 人</span>
+        <span>{circle.isArchived ? archivedMembers.length : activeMembers.length} 人</span>
       </header>
       <div className="circle-members-inner">
-        <section>
-          <p className="eyebrow">当前成员</p>
-          <h1>现在一起留在这里的人</h1>
-          <div className="circle-member-list">
-            {activeMembers.map((member) => (
-              <article key={member.id}>
-                <span>{member.name.slice(0, 1)}</span>
-                <div><strong>{member.circleNickname ?? member.nickname ?? member.name}{(member.circleNickname || member.nickname) ? `（${member.realName}）` : ""}</strong><small>{periodLabel(member.periods.at(-1)!.joinedAt, null)}</small></div>
-              </article>
-            ))}
-          </div>
-        </section>
+        {circle.isArchived ? (
+          <section>
+            <p className="eyebrow">退出时的成员</p>
+            <h1>这份档案冻结时，一起留在圈子里的人</h1>
+            <div className="circle-member-list">
+              {archivedMembers.map((member) => (
+                <article key={member.id}>
+                  <span>{member.name.slice(0, 1)}</span>
+                  <div>
+                    <strong>
+                      {member.circleNickname ?? member.nickname ?? member.name}
+                      {(member.circleNickname || member.nickname)
+                        ? `（${member.realName}）`
+                        : ""}
+                    </strong>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : (
+          <section>
+            <p className="eyebrow">当前成员</p>
+            <h1>现在一起留在这里的人</h1>
+            <div className="circle-member-list">
+              {activeMembers.map((member) => (
+                <article key={member.id}>
+                  <span>{member.name.slice(0, 1)}</span>
+                  <div><strong>{member.circleNickname ?? member.nickname ?? member.name}{(member.circleNickname || member.nickname) ? `（${member.realName}）` : ""}</strong><small>{periodLabel(member.periods.at(-1)!.joinedAt, null)}</small></div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
 
-        {formerMembers.length ? (
+        {!circle.isArchived && formerMembers.length ? (
           <section>
             <p className="eyebrow">曾经的成员</p>
             <h2>关系离开了，记录没有消失</h2>
@@ -86,9 +110,9 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             bio: friend.bio,
           }))}
           viewerIsActive={circle.isActive}
+          viewerHasArchive={circle.isArchived}
         />
       </div>
     </AppShell>
   );
 }
-import { AppShell } from "@/app/components/AppShell";

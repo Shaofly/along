@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -368,8 +369,8 @@ export const circles = pgTable(
   ],
 );
 
-export const circleMembershipPeriods = pgTable(
-  "circle_membership_periods",
+export const circleMemberRelations = pgTable(
+  "circle_member_relations",
   {
     id: text("id").primaryKey(),
     circleId: text("circle_id")
@@ -378,7 +379,40 @@ export const circleMembershipPeriods = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id),
-    visibleFrom: timestamp("visible_from", { withTimezone: true }),
+    historyVisibleFrom: timestamp("history_visible_from", {
+      withTimezone: true,
+    }).notNull(),
+    activePeriodId: text("active_period_id").references(
+      (): AnyPgColumn => circleMembershipPeriods.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("circle_member_relations_circle_user_idx").on(
+      table.circleId,
+      table.userId,
+    ),
+    index("circle_member_relations_user_active_idx").on(
+      table.userId,
+      table.activePeriodId,
+    ),
+    index("circle_member_relations_circle_active_idx").on(
+      table.circleId,
+      table.activePeriodId,
+    ),
+  ],
+);
+
+export const circleMembershipPeriods = pgTable(
+  "circle_membership_periods",
+  {
+    id: text("id").primaryKey(),
+    relationId: text("relation_id")
+      .notNull()
+      .references(() => circleMemberRelations.id, { onDelete: "cascade" }),
     circleNickname: text("circle_nickname"),
     joinedAt: timestamp("joined_at", { withTimezone: true })
       .defaultNow()
@@ -389,18 +423,16 @@ export const circleMembershipPeriods = pgTable(
     leftAt: timestamp("left_at", { withTimezone: true }),
   },
   (table) => [
-    index("circle_membership_circle_user_idx").on(table.circleId, table.userId),
-    index("circle_membership_user_period_idx").on(table.userId, table.joinedAt),
-    uniqueIndex("circle_membership_active_user_idx")
-      .on(table.circleId, table.userId)
+    index("circle_membership_relation_period_idx").on(
+      table.relationId,
+      table.joinedAt,
+    ),
+    uniqueIndex("circle_membership_active_relation_idx")
+      .on(table.relationId)
       .where(sql`${table.leftAt} is null`),
     check(
       "circle_membership_period_ordered",
       sql`${table.leftAt} is null or ${table.leftAt} >= ${table.joinedAt}`,
-    ),
-    check(
-      "circle_membership_visibility_ordered",
-      sql`${table.visibleFrom} is null or ${table.visibleFrom} <= ${table.joinedAt}`,
     ),
     check(
       "circle_membership_viewed_ordered",
@@ -605,16 +637,44 @@ export const draftViewers = pgTable(
   ],
 );
 
-export const circlePostSnapshots = pgTable(
-  "circle_post_snapshots",
+export const circleExitSnapshots = pgTable(
+  "circle_exit_snapshots",
   {
-    postId: text("post_id")
+    id: text("id").primaryKey(),
+    relationId: text("relation_id")
       .notNull()
-      .references(() => posts.id, { onDelete: "cascade" }),
-    userId: text("user_id")
+      .references(() => circleMemberRelations.id, { onDelete: "cascade" }),
+    circleName: text("circle_name").notNull(),
+    circleDescription: text("circle_description").default("").notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("circle_exit_snapshots_relation_idx").on(table.relationId),
+    check("circle_exit_snapshots_name_not_blank", sql`btrim(${table.circleName}) <> ''`),
+    check(
+      "circle_exit_snapshots_description_length",
+      sql`char_length(${table.circleDescription}) <= 500`,
+    ),
+  ],
+);
+
+export const circleExitSnapshotPosts = pgTable(
+  "circle_exit_snapshot_posts",
+  {
+    id: text("id").primaryKey(),
+    exitSnapshotId: text("exit_snapshot_id")
+      .notNull()
+      .references(() => circleExitSnapshots.id, { onDelete: "cascade" }),
+    sourcePostId: text("source_post_id").references(() => posts.id, {
+      onDelete: "set null",
+    }),
+    authorId: text("author_id")
       .notNull()
       .references(() => user.id),
     body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
     lastEditedById: text("last_edited_by_id").references(() => user.id),
     capturedAt: timestamp("captured_at", { withTimezone: true })
@@ -622,10 +682,18 @@ export const circlePostSnapshots = pgTable(
       .notNull(),
   },
   (table) => [
-    primaryKey({ columns: [table.postId, table.userId] }),
-    index("circle_snapshots_user_idx").on(table.userId),
+    index("circle_exit_snapshot_posts_snapshot_created_idx").on(
+      table.exitSnapshotId,
+      table.createdAt,
+    ),
+    index("circle_exit_snapshot_posts_source_idx").on(table.sourcePostId),
+    check("circle_exit_snapshot_posts_body_length", sql`char_length(${table.body}) <= 5000`),
     check(
-      "circle_snapshots_capture_ordered",
+      "circle_exit_snapshot_posts_timestamps_ordered",
+      sql`${table.updatedAt} >= ${table.createdAt}`,
+    ),
+    check(
+      "circle_exit_snapshot_posts_capture_ordered",
       sql`${table.capturedAt} >= ${table.updatedAt}`,
     ),
   ],
@@ -644,6 +712,28 @@ export const postViewers = pgTable(
   (table) => [
     primaryKey({ columns: [table.postId, table.userId] }),
     index("post_viewers_user_idx").on(table.userId),
+  ],
+);
+
+export const postParticipants = pgTable(
+  "post_participants",
+  {
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id),
+    addedById: text("added_by_id")
+      .notNull()
+      .references(() => user.id),
+    addedAt: timestamp("added_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_participants_user_idx").on(table.userId, table.postId),
   ],
 );
 
@@ -807,6 +897,31 @@ export const postMedia = pgTable(
     uniqueIndex("post_media_position_idx").on(table.postId, table.position),
     uniqueIndex("post_media_media_idx").on(table.mediaId),
     check("post_media_position_range", sql`${table.position} between 0 and 19`),
+  ],
+);
+
+export const circleExitSnapshotMedia = pgTable(
+  "circle_exit_snapshot_media",
+  {
+    snapshotPostId: text("snapshot_post_id")
+      .notNull()
+      .references(() => circleExitSnapshotPosts.id, { onDelete: "cascade" }),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.snapshotPostId, table.mediaId] }),
+    uniqueIndex("circle_exit_snapshot_media_position_idx").on(
+      table.snapshotPostId,
+      table.position,
+    ),
+    index("circle_exit_snapshot_media_media_idx").on(table.mediaId),
+    check(
+      "circle_exit_snapshot_media_position_range",
+      sql`${table.position} between 0 and 19`,
+    ),
   ],
 );
 

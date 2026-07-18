@@ -6,6 +6,7 @@ import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  circleExitSnapshotMedia,
   mediaAssets,
   draftMedia,
   mediaProcessingJobs,
@@ -268,12 +269,33 @@ export async function readMediaObject(storageKey: string, legacy: boolean) {
 }
 
 export async function deleteMediaAsset(mediaId: string) {
+  const [postReference, draftReference, archiveReference] = await Promise.all([
+    db
+      .select({ mediaId: postMedia.mediaId })
+      .from(postMedia)
+      .where(eq(postMedia.mediaId, mediaId))
+      .limit(1),
+    db
+      .select({ mediaId: draftMedia.mediaId })
+      .from(draftMedia)
+      .where(eq(draftMedia.mediaId, mediaId))
+      .limit(1),
+    db
+      .select({ mediaId: circleExitSnapshotMedia.mediaId })
+      .from(circleExitSnapshotMedia)
+      .where(eq(circleExitSnapshotMedia.mediaId, mediaId))
+      .limit(1),
+  ]);
+  if (postReference.length || draftReference.length || archiveReference.length) {
+    return false;
+  }
+
   const [asset] = await db
     .select()
     .from(mediaAssets)
     .where(eq(mediaAssets.id, mediaId))
     .limit(1);
-  if (!asset) return;
+  if (!asset) return true;
   const variants = await db
     .select({ storageKey: mediaVariants.storageKey })
     .from(mediaVariants)
@@ -293,6 +315,7 @@ export async function deleteMediaAsset(mediaId: string) {
     const { deleteStoredFile } = await import("@/lib/storage");
     await deleteStoredFile(asset.storageKey);
   }
+  return true;
 }
 
 export async function reconcilePublishingPosts(mediaIds: string[]) {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -7,10 +7,12 @@ import { z } from "zod";
 import { db } from "@/db";
 import {
   circles,
+  circleMemberRelations,
   draftMedia,
   drafts,
   mediaAssets,
   postMedia,
+  postParticipants,
   posts,
   postViewers,
 } from "@/db/schema";
@@ -24,6 +26,7 @@ const createPostSchema = z.object({
   circleId: z.string().nullable().optional(),
   managementMode: z.enum(["creator", "circle"]).default("creator"),
   viewerIds: z.array(z.string()).max(100).default([]),
+  participantIds: z.array(z.string()).max(10).default([]),
   mediaIds: z.array(z.string()).max(20, "每条动态最多 20 张图片").default([]),
   draftId: z.string().nullable().optional(),
 });
@@ -48,6 +51,9 @@ export async function POST(request: Request) {
   const viewerIds = [...new Set(parsed.data.viewerIds)].filter(
     (id) => id !== session.user.id,
   );
+  const participantIds = circleId
+    ? [...new Set([session.user.id, ...parsed.data.participantIds])]
+    : [];
   if (!parsed.data.body && mediaIds.length === 0) {
     return NextResponse.json({ error: "写点什么，或者选择一张图片。" }, { status: 400 });
   }
@@ -64,6 +70,19 @@ export async function POST(request: Request) {
     const membership = await getActiveCircleMembership(session.user.id, circleId);
     if (!circle || circle.status !== "active" || !membership) {
       return NextResponse.json({ error: "当前不能向这个圈子发布内容。" }, { status: 403 });
+    }
+    const activeMembers = await db
+      .select({ userId: circleMemberRelations.userId })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      );
+    const activeMemberIds = new Set(activeMembers.map((member) => member.userId));
+    if (!participantIds.every((id) => activeMemberIds.has(id))) {
+      return NextResponse.json({ error: "参与者必须是当前圈子成员。" }, { status: 403 });
     }
   } else {
     const friends = await getFriends(session.user.id);
@@ -138,6 +157,15 @@ export async function POST(request: Request) {
     if (!circleId && parsed.data.visibility === "selected") {
       await transaction.insert(postViewers).values(
         viewerIds.map((userId) => ({ postId: id, userId })),
+      );
+    }
+    if (circleId) {
+      await transaction.insert(postParticipants).values(
+        participantIds.map((userId) => ({
+          postId: id,
+          userId,
+          addedById: session.user.id,
+        })),
       );
     }
     if (mediaIds.length > 0) {

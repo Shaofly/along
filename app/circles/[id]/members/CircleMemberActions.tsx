@@ -13,6 +13,7 @@ export function CircleMemberActions({
   friends,
   activeMemberIds,
   currentNickname,
+  viewerHasArchive,
 }: {
   circleId: string;
   circleName: string;
@@ -21,6 +22,7 @@ export function CircleMemberActions({
   friends: FriendSummary[];
   activeMemberIds: string[];
   currentNickname: string;
+  viewerHasArchive: boolean;
 }) {
   const router = useRouter();
   const [showInvite, setShowInvite] = useState(false);
@@ -70,7 +72,7 @@ export function CircleMemberActions({
   }
 
   async function leave() {
-    if (!window.confirm(`确定退出“${circleName}”的活跃关系吗？你仍可只读查看退出前有权访问的记录，但不会再看到未来新增内容。`)) return;
+    if (!window.confirm(`确定退出“${circleName}”的活跃关系吗？系统会冻结一份你此刻有权查看的只读档案；圈子未来的新内容不会继续写入。`)) return;
     setPending(true);
     const response = await fetch(`/api/circles/${circleId}/leave`, { method: "POST" });
     const result = (await response.json()) as { error?: string };
@@ -91,6 +93,23 @@ export function CircleMemberActions({
     setPending(false);
     if (!response.ok) {
       setError(result.error ?? "申请失败。");
+      return;
+    }
+    router.push("/circles");
+    router.refresh();
+  }
+
+  async function deleteArchive() {
+    if (!window.confirm(`确定删除“${circleName}”的退出档案吗？这不会删除圈子或其他人的内容，但你将无法再从历史圈子中打开这份档案。`)) return;
+    setPending(true);
+    setError("");
+    const response = await fetch(`/api/circles/${circleId}/archive`, {
+      method: "DELETE",
+    });
+    const result = (await response.json()) as { error?: string };
+    setPending(false);
+    if (!response.ok) {
+      setError(result.error ?? "档案删除失败。");
       return;
     }
     router.push("/circles");
@@ -129,11 +148,21 @@ export function CircleMemberActions({
           <button className="quiet-danger" disabled={pending} onClick={leave} type="button">退出活跃关系</button>
         </>
       ) : !viewerIsActive && circleStatus === "active" ? (
-        <button className="soft-command" disabled={pending} onClick={rejoin} type="button">申请重新加入</button>
+        <>
+          <button className="soft-command" disabled={pending} onClick={rejoin} type="button">申请重新加入</button>
+          {viewerHasArchive ? (
+            <button className="quiet-danger" disabled={pending} onClick={deleteArchive} type="button">删除我的退出档案</button>
+          ) : null}
+        </>
       ) : (
-        <p className="member-action-note">
-          {circleStatus === "forming" ? "第一位受邀朋友接受后，成员关系操作会从这里开放。" : "这个圈子已经成为只读档案。"}
-        </p>
+        <>
+          <p className="member-action-note">
+            {circleStatus === "forming" ? "第一位受邀朋友接受后，成员关系操作会从这里开放。" : "这个圈子已经成为只读档案。"}
+          </p>
+          {viewerHasArchive ? (
+            <button className="quiet-danger" disabled={pending} onClick={deleteArchive} type="button">删除我的退出档案</button>
+          ) : null}
+        </>
       )}
       {error ? <p className="composer-error">{error}</p> : null}
     </section>

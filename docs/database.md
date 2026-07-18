@@ -2,14 +2,26 @@
 
 PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。Drizzle Schema 描述当前结构，`drizzle/` 中的顺序 SQL 文件描述结构如何演进；两者必须同步提交。
 
+## 实施状态
+
+| 数据能力 | 状态 | 当前实现证据 | 说明 |
+| --- | --- | --- | --- |
+| 认证、邀请、朋友关系与个人内容 | `已实现` | `db/schema.ts`、认证与邀请领域服务 | 已进入当前可用流程 |
+| 持久圈子成员关系与多次成员周期 | `已实现` | `circle_member_relations`、`circle_membership_periods`、`lib/circles.ts` | 活跃状态通过当前周期指针加速查询 |
+| 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
+| 圈子动态参与者 | `部分实现` | `post_participants`、发布与编辑接口 | 首页圈子发布路径、草稿和编辑弹窗仍需补齐 |
+| 地点与地图表 | `已确认设计` | [地图与地点功能](features/map.md) | 当前 Schema 尚无地点表 |
+| 评论、回应与完整通知 | `未来设想` | 产品规则已有方向 | 当前 Schema 尚无完整数据模型 |
+
 ## 领域划分
 
 | 领域 | 表 |
 | --- | --- |
 | 认证 | `user`、`session`、`account`、`verification` |
 | 邀请与关系 | `invitations`、`invitation_sponsors`、`friendships`、`friend_remarks` |
-| 小圈子 | `circles`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
-| 内容 | `posts`、`post_viewers`、`circle_post_snapshots`、`drafts`、`draft_viewers` |
+| 小圈子 | `circles`、`circle_member_relations`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
+| 内容 | `posts`、`post_viewers`、`post_participants`、`drafts`、`draft_viewers` |
+| 退出档案 | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` |
 | 媒体 | `media_assets`、`media_variants`、`media_upload_sessions`、`media_processing_jobs`、`post_media`、`draft_media` |
 
 二进制图片不进入 PostgreSQL。数据库只保存随机存储键、归属、类型、大小、尺寸、处理状态和内容关联。
@@ -17,10 +29,12 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 ## 人物名称与关系身份
 
 - `user.real_name` 保存必填真名，`user.nickname` 保存可选昵称；Better Auth 使用的 `user.name` 保留为主要显示名缓存，并在资料修改时与昵称或真名同步。
-- 现有用户迁移时将原 `name` 复制为 `real_name`，`nickname` 留空，保证旧账号无需重新注册且不会丢失身份。
 - `friend_remarks` 以“设置者 + 被备注的朋友”为唯一键保存单向私有备注。备注不放进 `friendships` 的单个共享字段，避免双方互相覆盖。
+- `circle_member_relations` 以“圈子 + 用户”为唯一键保存持久授权关系；`history_visible_from（最早获准查看内容时间）`不会因退出或重新加入而重算。
+- `circle_member_relations.active_period_id（当前活跃成员周期编号）`不为空表示当前是活跃成员，为空表示当前不在圈子。它是常用权限查询的快速指针，不替代成员周期事实。
 - `circle_membership_periods.circle_nickname` 保存该次成员期的圈子昵称。退出与再次加入是不同成员期，因此可以保留历史身份并在新周期重新设置。
 - `circle_membership_periods.last_viewed_at` 保存该次活跃成员期最近真正进入圈子的时间；退出后旧周期不再更新，再次加入从新周期重新计算未读。
+- `post_participants` 保存圈子动态明确标记的参与者。作者必须是参与者；编辑者、媒体上传者和普通可见者不会自动成为参与者。
 - `user.bio` 是个人简介的唯一字段，首页可以把它按单行个性签名展示，不增加重复的 `signature` 字段。
 - 所有姓名字段在写入时去除首尾空白；真名不得为空，昵称、备注和圈子昵称为空字符串时统一转为 `NULL`。
 
@@ -34,13 +48,15 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 
 ## 数据库不变量
 
-迁移 `0006_dapper_thor.sql` 将以下规则下沉到 PostgreSQL：
+当前 Schema 与 PostgreSQL 约束共同保证：
 
 - 邮箱统一为去除首尾空白的小写形式，并建立大小写不敏感唯一索引。
 - 同一认证提供方账号只能绑定一次；好友双方必须不同，并通过 `least` / `greatest` 无序唯一索引阻止反向重复关系。
 - 邀请人数限制为 2 至 5，使用状态与使用人、使用时间必须一致。
 - 圈子名称不能为空，名称和简介长度受限，解散状态必须带解散时间。
-- 成员退出时间不能早于加入时间，同一用户在一个圈子里最多只有一个活跃周期。
+- 成员退出时间不能早于加入时间，同一持久关系最多只有一个开放成员周期。
+- 同一用户与同一圈子只有一条持久成员关系。
+- `active_period_id（当前活跃成员周期编号）`必须指向同一持久关系中的开放周期；每个开放周期也必须是该关系的当前指针。数据库使用可延迟约束触发器在事务提交时验证双向一致性。
 - 成员最近查看时间不能早于加入时间；圈子未读由服务端按活跃成员期的查看时间、内容权限和事件时间计算。
 - 同一圈子和候选人最多只有一项待处理加入提案，提案状态与解决时间一致。
 - 个人内容不能使用圈内共同管理，圈子内容在通用可见范围字段中必须保持 private，由圈子成员周期单独授权。
@@ -51,6 +67,9 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - `media_upload_sessions` 保存 incoming Key、预期类型和大小以及 24 小时过期时间；`media_processing_jobs` 保存处理提供方、尝试次数和失败原因。
 - 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
 - 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。
+- 每条退出档案属于一条持久成员关系，同一关系最多保留一份当前退出档案。
+- 退出档案正文与媒体顺序保存在独立冻结表中；成员构成通过不可变成员周期和`captured_at（档案冻结时间）`重建，不额外保存人物资料快照。
+- 退出档案只引用逻辑媒体，不复制图片字节。媒体仍被动态、草稿或任一退出档案引用时，不允许删除底层资源。
 
 跨表规则，例如“空正文必须至少有一张图片”“selected 动态必须至少有一位查看者”“全部关联媒体 ready 后才能把动态变为 published”，无法用普通 CHECK 可靠表达，继续由事务内的服务端业务层验证。
 
@@ -61,6 +80,14 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 3. 审查 SQL，确认没有意外删表、改类型或丢数据操作。
 4. 在现有开发数据上运行 `pnpm run db:migrate`。
 5. 运行测试和业务冒烟测试，再同时提交 Schema、SQL 与 `drizzle/meta`。
+
+### 上线前开发数据原则
+
+- 产品尚未上线、数据库中只有可重建的开发与测试数据时，以开发效率和新模型正确性为先，不为旧开发数据额外编写复杂兼容逻辑。
+- 某部分旧数据若必须经过兼容转换才能进入新结构，可以直接清理该部分数据及其失去引用的关联资源。
+- 与新结构天然兼容、能够继续满足约束且不会形成脏数据的部分可以保留，不要求每次结构调整都清空整个数据库。
+- 清理范围必须按领域明确限定，并同步处理外键关联、媒体引用和私有存储文件，不能只删除主表而留下不可达数据。
+- 该原则仅适用于正式上线前。开始保存真实用户数据后，迁移必须默认保留数据，并提供可审查的数据转换、备份和恢复方案。
 
 生产迁移前必须完成数据库备份。多实例部署时只允许一个受控迁移任务执行 DDL，应用实例不应在启动时自动改表。
 

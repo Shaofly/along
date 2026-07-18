@@ -216,6 +216,27 @@ try {
   });
   await assertStatus(initialAccept, 200);
 
+  const historyBoundary = new Date();
+  const hiddenCircleEvent = `加入前系统动态 ${suffix}`;
+  await pool.query(
+    `update circle_member_relations
+        set history_visible_from = $1
+      where circle_id = $2 and user_id = $3`,
+    [historyBoundary, circleId, ids.get(users[1].email)],
+  );
+  await pool.query(
+    `insert into circle_events (id, circle_id, actor_id, type, message, created_at)
+     values ($1, $2, $3, $4, $5, $6)`,
+    [
+      randomUUID(),
+      circleId,
+      ids.get(users[0].email),
+      "history_boundary_test",
+      hiddenCircleEvent,
+      new Date(historyBoundary.getTime() - 1_000),
+    ],
+  );
+
   const circleMedia = await upload(cookieA, { r: 221, g: 205, b: 177 });
   const circlePost = await createPost(cookieA, {
     body: `退出前共同记录 ${suffix}`,
@@ -223,11 +244,25 @@ try {
     managementMode: "circle",
     visibility: "private",
     viewerIds: [],
+    participantIds: [
+      ids.get(users[0].email),
+      ids.get(users[1].email),
+    ],
     mediaIds: [circleMedia.id],
   });
   const memberCirclePage = await api(`/circles/${circleId}`, { headers: { cookie: cookieB } });
   assert.equal(memberCirclePage.status, 200);
-  assert.match(await memberCirclePage.text(), new RegExp(`退出前共同记录 ${suffix}`));
+  const memberCircleHtml = await memberCirclePage.text();
+  assert.match(memberCircleHtml, new RegExp(`退出前共同记录 ${suffix}`));
+  assert.doesNotMatch(memberCircleHtml, new RegExp(hiddenCircleEvent));
+  const activeProfile = await api(`/profile/${ids.get(users[1].email)}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(activeProfile.status, 200);
+  assert.match(
+    await activeProfile.text(),
+    new RegExp(`退出前共同记录 ${suffix}`),
+  );
 
   const currentPost = await pool.query(`select updated_at from posts where id = $1`, [circlePost.id]);
   const sharedEdit = await api(`/api/posts/${circlePost.id}`, {
@@ -255,6 +290,10 @@ try {
       body: `退出后的新版本 ${suffix}`,
       managementMode: "circle",
       viewerIds: [],
+      participantIds: [
+        ids.get(users[0].email),
+        ids.get(users[1].email),
+      ],
       expectedUpdatedAt: afterSharedEdit.rows[0].updated_at.toISOString(),
     }),
   });
@@ -263,8 +302,17 @@ try {
   const historicalHtml = await historicalPage.text();
   assert.match(historicalHtml, new RegExp(`退出时保存的版本 ${suffix}`));
   assert.doesNotMatch(historicalHtml, new RegExp(`退出后的新版本 ${suffix}`));
+  assert.doesNotMatch(historicalHtml, new RegExp(hiddenCircleEvent));
   const historicalImage = await api(`/api/media/${circleMedia.id}`, { headers: { cookie: cookieB } });
   assert.equal(historicalImage.status, 200);
+  const exitedProfile = await api(`/profile/${ids.get(users[1].email)}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(exitedProfile.status, 200);
+  assert.doesNotMatch(
+    await exitedProfile.text(),
+    new RegExp(`退出时保存的版本 ${suffix}`),
+  );
 
   const afterLeaveMedia = await upload(cookieA, { r: 183, g: 208, b: 216 });
   await createPost(cookieA, {
@@ -280,6 +328,135 @@ try {
   const forbiddenFutureImage = await api(`/api/media/${afterLeaveMedia.id}`, { headers: { cookie: cookieB } });
   assert.equal(forbiddenFutureImage.status, 404);
 
+  const rejoinRequest = await api(`/api/circles/${circleId}/rejoin`, {
+    method: "POST",
+    headers: { cookie: cookieB },
+  });
+  await assertStatus(rejoinRequest, 200);
+  const { proposalId: rejoinProposalId } = await rejoinRequest.json();
+  const approveRejoin = await api(
+    `/api/circles/proposals/${rejoinProposalId}/respond`,
+    {
+      method: "POST",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      body: JSON.stringify({ decision: "accept" }),
+    },
+  );
+  await assertStatus(approveRejoin, 200);
+  const acceptRejoin = await api(
+    `/api/circles/proposals/${rejoinProposalId}/respond`,
+    {
+      method: "POST",
+      headers: { cookie: cookieB, "content-type": "application/json" },
+      body: JSON.stringify({ decision: "accept" }),
+    },
+  );
+  await assertStatus(acceptRejoin, 200);
+
+  const rejoinedCirclePage = await api(`/circles/${circleId}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(rejoinedCirclePage.status, 200);
+  const rejoinedHtml = await rejoinedCirclePage.text();
+  assert.match(rejoinedHtml, new RegExp(`退出后的新版本 ${suffix}`));
+  assert.match(rejoinedHtml, new RegExp(`退出后新增记录 ${suffix}`));
+  assert.doesNotMatch(rejoinedHtml, new RegExp(hiddenCircleEvent));
+  const restoredFutureImage = await api(`/api/media/${afterLeaveMedia.id}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(restoredFutureImage.status, 200);
+  const archivedAfterRejoin = await pool.query(
+    `select ces.id
+       from circle_exit_snapshots ces
+       join circle_member_relations cmr on cmr.id = ces.relation_id
+      where cmr.circle_id = $1 and cmr.user_id = $2`,
+    [circleId, ids.get(users[1].email)],
+  );
+  assert.equal(archivedAfterRejoin.rowCount, 0);
+
+  const rejoinedProfile = await api(`/profile/${ids.get(users[1].email)}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(rejoinedProfile.status, 200);
+  const rejoinedProfileHtml = await rejoinedProfile.text();
+  assert.match(
+    rejoinedProfileHtml,
+    new RegExp(`退出后的新版本 ${suffix}`),
+  );
+  assert.doesNotMatch(
+    rejoinedProfileHtml,
+    new RegExp(`退出后新增记录 ${suffix}`),
+  );
+
+  const relationRows = await pool.query(
+    `select id, user_id, active_period_id
+       from circle_member_relations
+      where circle_id = $1`,
+    [circleId],
+  );
+  assert.equal(relationRows.rowCount, 2);
+  const relationA = relationRows.rows.find(
+    (row) => row.user_id === ids.get(users[0].email),
+  );
+  const relationB = relationRows.rows.find(
+    (row) => row.user_id === ids.get(users[1].email),
+  );
+  assert(relationA?.active_period_id && relationB?.active_period_id);
+  const constraintClient = await pool.connect();
+  try {
+    await constraintClient.query("begin");
+    await constraintClient.query(
+      `update circle_member_relations set active_period_id = $1 where id = $2`,
+      [relationB.active_period_id, relationA.id],
+    );
+    await assert.rejects(
+      constraintClient.query("commit"),
+      /active period|relation|membership/i,
+    );
+  } finally {
+    await constraintClient.query("rollback").catch(() => undefined);
+    constraintClient.release();
+  }
+
+  const secondLeave = await api(`/api/circles/${circleId}/leave`, {
+    method: "POST",
+    headers: { cookie: cookieB },
+  });
+  await assertStatus(secondLeave, 200);
+  const secondArchivePage = await api(`/circles/${circleId}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(secondArchivePage.status, 200);
+  const secondArchiveHtml = await secondArchivePage.text();
+  assert.match(secondArchiveHtml, new RegExp(`退出后的新版本 ${suffix}`));
+  assert.match(secondArchiveHtml, new RegExp(`退出后新增记录 ${suffix}`));
+  const latestArchiveRows = await pool.query(
+    `select ces.id
+       from circle_exit_snapshots ces
+       join circle_member_relations cmr on cmr.id = ces.relation_id
+      where cmr.circle_id = $1 and cmr.user_id = $2`,
+    [circleId, ids.get(users[1].email)],
+  );
+  assert.equal(latestArchiveRows.rowCount, 1);
+
+  const deleteArchive = await api(`/api/circles/${circleId}/archive`, {
+    method: "DELETE",
+    headers: { cookie: cookieB },
+  });
+  await assertStatus(deleteArchive, 200);
+  const deletedArchivePage = await api(`/circles/${circleId}`, {
+    headers: { cookie: cookieB },
+  });
+  assert.equal(deletedArchivePage.status, 404);
+  const deletedArchiveRows = await pool.query(
+    `select ces.id
+       from circle_exit_snapshots ces
+       join circle_member_relations cmr on cmr.id = ces.relation_id
+      where cmr.circle_id = $1 and cmr.user_id = $2`,
+    [circleId, ids.get(users[1].email)],
+  );
+  assert.equal(deletedArchiveRows.rowCount, 0);
+
   for (const post of createdPostIds) {
     const response = await api(`/api/posts/${post.id}`, {
       method: "DELETE",
@@ -288,7 +465,9 @@ try {
     await assertStatus(response, 200);
   }
   createdPostIds.length = 0;
-  console.log("Smoke test passed: auth, media variants and metadata stripping, personal visibility, circles, shared editing, exit snapshots, future-content isolation, and cleanup.");
+  console.log(
+    "Smoke test passed: auth, media safety, personal visibility, participants, durable circle membership, frozen exit archives, rejoin restoration, deferred active-period constraints, archive deletion, and cleanup.",
+  );
 } finally {
   const rows = await pool.query(
     `select id from "user" where email = any($1::text[])`,

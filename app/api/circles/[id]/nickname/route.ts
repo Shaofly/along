@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { circleEvents, circleMembershipPeriods } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import { getActiveCircleMembership } from "@/lib/circles";
 
 const nicknameSchema = z.object({
   nickname: z.string().trim().max(40, "圈子昵称不能超过 40 个字"),
@@ -23,18 +24,21 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "请检查圈子昵称。" }, { status: 400 });
   }
 
-  const [membership] = await db
+  const membership = await getActiveCircleMembership(
+    session.user.id,
+    circleId,
+  );
+  if (!membership) {
+    return NextResponse.json(
+      { error: "只有活跃成员可以设置圈子昵称。" },
+      { status: 403 },
+    );
+  }
+
+  await db
     .update(circleMembershipPeriods)
     .set({ circleNickname: parsed.data.nickname || null })
-    .where(
-      and(
-        eq(circleMembershipPeriods.circleId, circleId),
-        eq(circleMembershipPeriods.userId, session.user.id),
-        isNull(circleMembershipPeriods.leftAt),
-      ),
-    )
-    .returning({ id: circleMembershipPeriods.id });
-  if (!membership) return NextResponse.json({ error: "只有活跃成员可以设置圈子昵称。" }, { status: 403 });
+    .where(eq(circleMembershipPeriods.id, membership.id));
 
   await db.insert(circleEvents).values({
     id: crypto.randomUUID(),

@@ -19,11 +19,28 @@ const managementOptions = [
   { value: "circle", label: "共同管理" },
 ] as const;
 
-export function CircleComposer({ circleId, circleName }: { circleId: string; circleName: string }) {
+type CircleComposerMember = {
+  id: string;
+  name: string;
+  realName: string;
+};
+
+export function CircleComposer({
+  circleId,
+  circleName,
+  currentUserId,
+  members,
+}: {
+  circleId: string;
+  circleName: string;
+  currentUserId: string;
+  members: CircleComposerMember[];
+}) {
   const router = useRouter();
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [managementMode, setManagementMode] = useState<"creator" | "circle">("creator");
+  const [participantIds, setParticipantIds] = useState<string[]>([currentUserId]);
   const [pending, setPending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState("");
@@ -56,6 +73,7 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
           managementMode,
           visibility: "private",
           viewerIds: [],
+          participantIds,
           mediaIds: uploadedIds,
         }),
       });
@@ -64,6 +82,7 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
       setBody("");
       setFiles([]);
       setManagementMode("creator");
+      setParticipantIds([currentUserId]);
       router.refresh();
     } catch (publishError) {
       await Promise.all(uploadedIds.map((id) => fetch(`/api/media/${id}`, { method: "DELETE" })));
@@ -113,6 +132,28 @@ export function CircleComposer({ circleId, circleName }: { circleId: string; cir
           value={managementMode}
         />
       </div>
+      <fieldset className="friend-picker circle-participant-picker">
+        <legend>这次一起参与的人</legend>
+        {members.map((member) => {
+          const isCurrentUser = member.id === currentUserId;
+          return (
+            <label key={member.id}>
+              <input
+                checked={isCurrentUser || participantIds.includes(member.id)}
+                disabled={isCurrentUser}
+                onChange={(event) => setParticipantIds((current) =>
+                  event.target.checked
+                    ? [...new Set([...current, member.id])]
+                    : current.filter((id) => id !== member.id),
+                )}
+                type="checkbox"
+              />
+              {member.name}
+              {member.realName !== member.name ? `（${member.realName}）` : ""}
+            </label>
+          );
+        })}
+      </fieldset>
       {error ? <p className="composer-error">{error}</p> : null}
       <div className="composer-tools">
         <label className="photo-input">

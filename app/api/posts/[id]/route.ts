@@ -1,10 +1,18 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { circles, mediaAssets, postMedia, posts, postViewers } from "@/db/schema";
+import {
+  circles,
+  circleMemberRelations,
+  mediaAssets,
+  postMedia,
+  postParticipants,
+  posts,
+  postViewers,
+} from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { getActiveCircleMembership } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
@@ -14,6 +22,7 @@ const editPostSchema = z.object({
   body: z.string().trim().max(5000, "正文不能超过 5000 个字"),
   visibility: z.enum(["friends", "selected", "private"]).optional(),
   viewerIds: z.array(z.string()).max(100).default([]),
+  participantIds: z.array(z.string()).max(10).optional(),
   managementMode: z.enum(["creator", "circle"]).optional(),
   expectedUpdatedAt: z.string().datetime().optional(),
 });
@@ -98,6 +107,43 @@ export async function PATCH(
     }
   }
 
+  let participantIds: string[] | undefined;
+  let existingParticipantIds: string[] = [];
+  if (post.circleId && parsed.data.participantIds) {
+    participantIds = [
+      ...new Set([post.authorId, ...parsed.data.participantIds]),
+    ];
+    const [activeMembers, existingParticipants] = await Promise.all([
+      db
+        .select({ userId: circleMemberRelations.userId })
+        .from(circleMemberRelations)
+        .where(
+          and(
+            eq(circleMemberRelations.circleId, post.circleId),
+            isNotNull(circleMemberRelations.activePeriodId),
+          ),
+        ),
+      db
+        .select({ userId: postParticipants.userId })
+        .from(postParticipants)
+        .where(eq(postParticipants.postId, id)),
+    ]);
+    existingParticipantIds = existingParticipants.map(
+      (participant) => participant.userId,
+    );
+    const allowedIds = new Set([
+      post.authorId,
+      ...activeMembers.map((member) => member.userId),
+      ...existingParticipantIds,
+    ]);
+    if (!participantIds.every((id) => allowedIds.has(id))) {
+      return NextResponse.json(
+        { error: "新参与者必须是当前圈子成员；原有参与者可以继续保留。" },
+        { status: 403 },
+      );
+    }
+  }
+
   let nextManagementMode = post.managementMode;
   if (post.circleId && parsed.data.managementMode) {
     if (post.managementMode === "circle" && parsed.data.managementMode === "creator") {
@@ -130,6 +176,35 @@ export async function PATCH(
       await transaction.insert(postViewers).values(
         viewerIds.map((userId) => ({ postId: id, userId })),
       );
+    }
+    if (post.circleId && participantIds) {
+      const nextParticipantIdSet = new Set(participantIds);
+      const existingParticipantIdSet = new Set(existingParticipantIds);
+      const removedParticipantIds = existingParticipantIds.filter(
+        (userId) => !nextParticipantIdSet.has(userId),
+      );
+      const addedParticipantIds = participantIds.filter(
+        (userId) => !existingParticipantIdSet.has(userId),
+      );
+      if (removedParticipantIds.length) {
+        await transaction
+          .delete(postParticipants)
+          .where(
+            and(
+              eq(postParticipants.postId, id),
+              inArray(postParticipants.userId, removedParticipantIds),
+            ),
+          );
+      }
+      if (addedParticipantIds.length) {
+        await transaction.insert(postParticipants).values(
+          addedParticipantIds.map((userId) => ({
+            postId: id,
+            userId,
+            addedById: session.user.id,
+          })),
+        );
+      }
     }
     if (post.circleId) {
       await transaction

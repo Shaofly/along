@@ -26,7 +26,7 @@ export default async function HomePage() {
 
   const [currentUser, ownPosts, friendRows, circleDashboard, initialDraft] = await Promise.all([
     getShellUser(session.user.id),
-    getVisiblePosts(session.user.id, { authorId: session.user.id, limit: 20 }),
+    getVisiblePosts(session.user.id, { profileId: session.user.id, limit: 20 }),
     getFriends(session.user.id),
     getCircleDashboard(session.user.id),
     getLatestDraft(session.user.id),

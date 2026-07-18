@@ -3,7 +3,12 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db";
-import { draftMedia, mediaAssets, postMedia } from "@/db/schema";
+import {
+  circleExitSnapshotMedia,
+  draftMedia,
+  mediaAssets,
+  postMedia,
+} from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { canAccessMedia } from "@/lib/media/access";
 import { mediaResponse } from "@/lib/media/response";
@@ -63,7 +68,24 @@ export async function DELETE(
   if (draftLink) {
     return NextResponse.json({ error: "草稿中的图片需要随草稿更新。" }, { status: 409 });
   }
+  const [archiveLink] = await db
+    .select({ snapshotPostId: circleExitSnapshotMedia.snapshotPostId })
+    .from(circleExitSnapshotMedia)
+    .where(eq(circleExitSnapshotMedia.mediaId, id))
+    .limit(1);
+  if (archiveLink) {
+    return NextResponse.json(
+      { error: "这张图片仍属于一份退出档案，不能单独删除。" },
+      { status: 409 },
+    );
+  }
 
-  await deleteMediaAsset(id);
+  const deleted = await deleteMediaAsset(id);
+  if (!deleted) {
+    return NextResponse.json(
+      { error: "这张图片仍被历史档案使用，不能单独删除。" },
+      { status: 409 },
+    );
+  }
   return NextResponse.json({ ok: true });
 }

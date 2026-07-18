@@ -90,7 +90,11 @@ export function CirclesClient({
                     {action.role === "candidate"
                       ? action.kind === "rejoin" ? "成员们已经同意，确认后重新加入。" : "朋友邀请你加入这个小圈子。"
                       : `是否同意 ${action.candidateName} 加入？`}
-                    {action.allowHistory ? " 同意后可以查看加入前的记录。" : " 加入前的记录不会开放。"}
+                    {action.kind === "rejoin"
+                      ? " 重新加入后会恢复原本获准的历史范围。"
+                      : action.allowHistory
+                        ? " 同意后可以查看加入前的记录。"
+                        : " 加入前的记录不会开放。"}
                   </p>
                 </div>
                 <div className="circle-action-buttons">

@@ -1,9 +1,16 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/db";
-import { mediaAssets, postMedia } from "@/db/schema";
+import {
+  circleExitSnapshotMedia,
+  circleExitSnapshotPosts,
+  circleExitSnapshots,
+  circleMemberRelations,
+  mediaAssets,
+  postMedia,
+} from "@/db/schema";
 import { canViewPost } from "@/lib/content";
 
 export async function canAccessMedia(userId: string, mediaId: string) {
@@ -22,6 +29,37 @@ export async function canAccessMedia(userId: string, mediaId: string) {
   for (const link of links) {
     if (await canViewPost(userId, link.postId)) return true;
   }
+
+  const [archiveLink] = await db
+    .select({ snapshotId: circleExitSnapshots.id })
+    .from(circleExitSnapshotMedia)
+    .innerJoin(
+      circleExitSnapshotPosts,
+      eq(
+        circleExitSnapshotMedia.snapshotPostId,
+        circleExitSnapshotPosts.id,
+      ),
+    )
+    .innerJoin(
+      circleExitSnapshots,
+      eq(
+        circleExitSnapshotPosts.exitSnapshotId,
+        circleExitSnapshots.id,
+      ),
+    )
+    .innerJoin(
+      circleMemberRelations,
+      eq(circleExitSnapshots.relationId, circleMemberRelations.id),
+    )
+    .where(
+      and(
+        eq(circleExitSnapshotMedia.mediaId, mediaId),
+        eq(circleMemberRelations.userId, userId),
+        isNull(circleMemberRelations.activePeriodId),
+      ),
+    )
+    .limit(1);
+  if (archiveLink) return true;
+
   return false;
 }
-

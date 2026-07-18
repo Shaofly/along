@@ -6,7 +6,7 @@ import { PostStream } from "@/app/components/PostStream";
 import { AppShell } from "@/app/components/AppShell";
 import { auth } from "@/lib/auth";
 import { getCircleDetail } from "@/lib/circles";
-import { getVisiblePosts } from "@/lib/content";
+import { getCircleArchivePosts, getVisiblePosts } from "@/lib/content";
 import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
@@ -19,13 +19,18 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/");
   const { id } = await params;
-  const [currentUser, circle, posts, friends] = await Promise.all([
+  const [currentUser, circle, friends] = await Promise.all([
     getShellUser(session.user.id),
     getCircleDetail(session.user.id, id),
-    getVisiblePosts(session.user.id, { circleId: id, limit: 40 }),
     getFriends(session.user.id),
   ]);
   if (!circle || !currentUser) notFound();
+  const posts = circle.isActive
+    ? await getVisiblePosts(session.user.id, { circleId: id, limit: 40 })
+    : await getCircleArchivePosts(session.user.id, id, 40);
+  const visibleMembers = circle.isArchived
+    ? circle.members
+    : circle.members.filter((member) => member.isActive);
 
   return (
     <AppShell pageClassName="circle-detail-page" user={currentUser}>
@@ -40,12 +45,16 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
         <div className="circle-detail-main">
           <section className="circle-cover-band">
             <div>
-              <p className="eyebrow">{circle.members.filter((member) => member.isActive).length} 位当前成员</p>
+              <p className="eyebrow">
+                {circle.isArchived
+                  ? `退出时 ${visibleMembers.length} 位成员`
+                  : `${visibleMembers.length} 位当前成员`}
+              </p>
               <h1>{circle.name}</h1>
               <p>{circle.description || "一些普通日子，在这里慢慢成为共同回忆。"}</p>
             </div>
             <div className="circle-cover-members">
-              {circle.members.filter((member) => member.isActive).slice(0, 5).map((member) => (
+              {visibleMembers.slice(0, 5).map((member) => (
                 <span key={member.id}>{member.name.slice(0, 1)}</span>
               ))}
             </div>
@@ -54,9 +63,21 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
           {circle.status === "forming" ? (
             <div className="circle-state-note"><strong>正在等第一位朋友加入</strong><p>至少一位受邀朋友接受后，这里才会开始发布共同记录。</p></div>
           ) : circle.isActive ? (
-            <CircleComposer circleId={circle.id} circleName={circle.name} />
+            <CircleComposer
+              circleId={circle.id}
+              circleName={circle.name}
+              currentUserId={session.user.id}
+              members={visibleMembers.map((member) => ({
+                id: member.id,
+                name: member.name,
+                realName: member.realName,
+              }))}
+            />
           ) : (
-            <div className="circle-state-note"><strong>这是一份只读的共同档案</strong><p>你仍能查看成员期间留下的内容，但不会看到退出后的新记录。</p></div>
+            <div className="circle-state-note">
+              <strong>这是一份只读的退出档案</strong>
+              <p>这里冻结了你退出时有权查看的最新内容；圈子之后的变化不会继续写进这份档案。</p>
+            </div>
           )}
 
           <section className="circle-feed-section">

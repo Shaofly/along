@@ -434,6 +434,33 @@ try {
     { headers: { cookie: cookieB } },
   );
   await assertStatus(draftFriendMedia, 404);
+  const forkMediaDraftResponse = await api(
+    `/api/drafts/${mediaDraftId}/fork`,
+    {
+      method: "POST",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      body: JSON.stringify({
+        body: `草稿媒体副本 ${suffix}`,
+        visibility: "private",
+        circleId: null,
+        managementMode: "creator",
+        viewerIds: [],
+        participantIds: [],
+        mediaIds: [draftOnlyMedia.id],
+      }),
+    },
+  );
+  await assertStatus(forkMediaDraftResponse, 200);
+  const forkMediaDraft = await forkMediaDraftResponse.json();
+  assert(forkMediaDraft.id);
+  assert.equal(forkMediaDraft.media.length, 1);
+  assert.notEqual(forkMediaDraft.media[0].id, draftOnlyMedia.id);
+  const forkedDraftMedia = await api(
+    `/api/media/${forkMediaDraft.media[0].id}/preview`,
+    { headers: { cookie: cookieA } },
+  );
+  await assertStatus(forkedDraftMedia, 200);
+  assertProtectedMediaCache(forkedDraftMedia);
   const uncommittedDraftMedia = await pool.query(
     `select content_committed_at
        from media_assets
@@ -446,6 +473,128 @@ try {
     headers: { cookie: cookieA },
   });
   await assertStatus(deleteMediaDraft, 200);
+  const deleteForkMediaDraft = await api(
+    `/api/drafts/${forkMediaDraft.id}`,
+    {
+      method: "DELETE",
+      headers: { cookie: cookieA },
+    },
+  );
+  await assertStatus(deleteForkMediaDraft, 200);
+
+  const firstMultiDraftResponse = await api("/api/drafts", {
+    method: "POST",
+    headers: { cookie: cookieA, "content-type": "application/json" },
+    body: JSON.stringify({
+      body: `多草稿一 ${suffix}`,
+      visibility: "private",
+      circleId: null,
+      managementMode: "creator",
+      viewerIds: [],
+      participantIds: [],
+      mediaIds: [],
+    }),
+  });
+  await assertStatus(firstMultiDraftResponse, 200);
+  const firstMultiDraft = await firstMultiDraftResponse.json();
+  const secondMultiDraftResponse = await api("/api/drafts", {
+    method: "POST",
+    headers: { cookie: cookieA, "content-type": "application/json" },
+    body: JSON.stringify({
+      body: `多草稿二 ${suffix}`,
+      visibility: "private",
+      circleId: null,
+      managementMode: "creator",
+      viewerIds: [],
+      participantIds: [],
+      mediaIds: [],
+    }),
+  });
+  await assertStatus(secondMultiDraftResponse, 200);
+  const secondMultiDraft = await secondMultiDraftResponse.json();
+  assert.notEqual(firstMultiDraft.id, secondMultiDraft.id);
+  const multiDraftListResponse = await api(
+    "/api/drafts?target=personal&limit=60",
+    { headers: { cookie: cookieA } },
+  );
+  await assertStatus(multiDraftListResponse, 200);
+  const multiDraftList = await multiDraftListResponse.json();
+  assert(
+    multiDraftList.drafts.some((draft) => draft.id === firstMultiDraft.id),
+  );
+  assert(
+    multiDraftList.drafts.some((draft) => draft.id === secondMultiDraft.id),
+  );
+
+  const updateFirstDraftResponse = await api(
+    `/api/drafts/${firstMultiDraft.id}`,
+    {
+      method: "PATCH",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      body: JSON.stringify({
+        body: `多草稿一更新 ${suffix}`,
+        visibility: "private",
+        circleId: null,
+        managementMode: "creator",
+        viewerIds: [],
+        participantIds: [],
+        mediaIds: [],
+        expectedUpdatedAt: firstMultiDraft.updatedAt,
+      }),
+    },
+  );
+  await assertStatus(updateFirstDraftResponse, 200);
+  const staleDraftUpdateResponse = await api(
+    `/api/drafts/${firstMultiDraft.id}`,
+    {
+      method: "PATCH",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      body: JSON.stringify({
+        body: `本地冲突版本 ${suffix}`,
+        visibility: "private",
+        circleId: null,
+        managementMode: "creator",
+        viewerIds: [],
+        participantIds: [],
+        mediaIds: [],
+        expectedUpdatedAt: firstMultiDraft.updatedAt,
+      }),
+    },
+  );
+  await assertStatus(staleDraftUpdateResponse, 409);
+  const staleDraftUpdate = await staleDraftUpdateResponse.json();
+  assert.equal(staleDraftUpdate.code, "draft_conflict");
+  const forkDraftResponse = await api(
+    `/api/drafts/${firstMultiDraft.id}/fork`,
+    {
+      method: "POST",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      body: JSON.stringify({
+        body: `本地冲突版本 ${suffix}`,
+        visibility: "private",
+        circleId: null,
+        managementMode: "creator",
+        viewerIds: [],
+        participantIds: [],
+        mediaIds: [],
+      }),
+    },
+  );
+  await assertStatus(forkDraftResponse, 200);
+  const forkedDraft = await forkDraftResponse.json();
+  assert(forkedDraft.id);
+  assert.notEqual(forkedDraft.id, firstMultiDraft.id);
+  for (const draftId of [
+    firstMultiDraft.id,
+    secondMultiDraft.id,
+    forkedDraft.id,
+  ]) {
+    const cleanupDraft = await api(`/api/drafts/${draftId}`, {
+      method: "DELETE",
+      headers: { cookie: cookieA },
+    });
+    await assertStatus(cleanupDraft, 200);
+  }
 
   const profileUpdate = await api("/api/profile", {
     method: "PATCH",
@@ -1622,7 +1771,7 @@ try {
   }
   createdPostIds.length = 0;
   console.log(
-    "Smoke test passed: auth, media safety and expired-orphan cleanup, permission-revalidated ETag caching, temporary and draft media boundaries, owner revocation after archive deletion, personal visibility, participant revalidation, atomic edit conflicts, early-or-24-hour circle creation settlement, durable circle membership, frozen exit archives, activity-independent historical ordering, rejoin restoration, approval membership changes, direct sole-member invitations, serialized and database-constrained circle capacity, deferred database constraints, archive deletion, and cleanup.",
+    "Smoke test passed: auth, media safety and expired-orphan cleanup, permission-revalidated ETag caching, temporary and draft media boundaries, multi-draft listing, optimistic draft conflicts and conflict forking, owner revocation after archive deletion, personal visibility, participant revalidation, atomic edit conflicts, early-or-24-hour circle creation settlement, durable circle membership, frozen exit archives, activity-independent historical ordering, rejoin restoration, approval membership changes, direct sole-member invitations, serialized and database-constrained circle capacity, deferred database constraints, archive deletion, and cleanup.",
   );
 } finally {
   const rows = await pool.query(

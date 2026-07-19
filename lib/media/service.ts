@@ -33,6 +33,14 @@ export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const localStorage = new LocalPrivateStorage();
 const localProcessor = new LocalSharpProcessor();
 
+function extensionForMime(mimeType: string) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/heic") return "heic";
+  if (mimeType === "image/heif") return "heif";
+  return "jpg";
+}
+
 function safeExtension(file: File) {
   if (file.type === "image/png") return "png";
   if (file.type === "image/webp") return "webp";
@@ -321,6 +329,112 @@ export async function deleteMediaAsset(mediaId: string) {
   }
   await db.delete(mediaAssets).where(eq(mediaAssets.id, mediaId));
   return true;
+}
+
+export async function cloneMediaAsset(mediaId: string, ownerId: string) {
+  const [asset] = await db
+    .select()
+    .from(mediaAssets)
+    .where(
+      and(eq(mediaAssets.id, mediaId), eq(mediaAssets.ownerId, ownerId)),
+    )
+    .limit(1);
+  if (!asset) throw new Error("需要复制的草稿图片已经不存在。");
+  const variants = await db
+    .select()
+    .from(mediaVariants)
+    .where(eq(mediaVariants.mediaId, mediaId));
+
+  if (asset.status === "ready" && variants.length) {
+    const nextMediaId = randomUUID();
+    const storedKeys: string[] = [];
+    try {
+      const clonedVariants: Array<typeof mediaVariants.$inferInsert> = [];
+      for (const variant of variants) {
+        const bytes = await localStorage.read(variant.storageKey);
+        const storageKey = path.posix.join(
+          "media",
+          nextMediaId,
+          `${variant.variantType}-${randomUUID()}.${extensionForMime(variant.mimeType)}`,
+        );
+        const stored = await localStorage.put(storageKey, bytes);
+        storedKeys.push(storageKey);
+        clonedVariants.push({
+          mediaId: nextMediaId,
+          variantType: variant.variantType,
+          storageKey,
+          mimeType: variant.mimeType,
+          byteSize: stored.byteSize,
+          width: variant.width,
+          height: variant.height,
+          etag: stored.etag,
+        });
+      }
+      const preview = clonedVariants.find(
+        (variant) => variant.variantType === "preview",
+      );
+      if (!preview) throw new Error("草稿图片缺少可复制的预览版本。");
+      const now = new Date();
+      await db.transaction(async (transaction) => {
+        await transaction.insert(mediaAssets).values({
+          id: nextMediaId,
+          ownerId,
+          storageKey: preview.storageKey,
+          originalName: asset.originalName,
+          mimeType: preview.mimeType,
+          byteSize: preview.byteSize,
+          status: "ready",
+          sourceMimeType: asset.sourceMimeType,
+          sourceByteSize: asset.sourceByteSize,
+          sourceWidth: asset.sourceWidth,
+          sourceHeight: asset.sourceHeight,
+          readyAt: now,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await transaction.insert(mediaVariants).values(clonedVariants);
+      });
+      return {
+        id: nextMediaId,
+        originalName: asset.originalName,
+        mimeType: preview.mimeType,
+      };
+    } catch (error) {
+      await Promise.all(storedKeys.map((key) => localStorage.delete(key)));
+      throw error;
+    }
+  }
+
+  const [uploadSession] = await db
+    .select({ incomingKey: mediaUploadSessions.incomingKey })
+    .from(mediaUploadSessions)
+    .where(eq(mediaUploadSessions.mediaId, mediaId))
+    .limit(1);
+  try {
+    const bytes = uploadSession
+      ? await localStorage.read(uploadSession.incomingKey)
+      : await readMediaObject(asset.storageKey, variants.length === 0);
+    const file = new File([bytes], asset.originalName, {
+      type: asset.sourceMimeType ?? asset.mimeType,
+    });
+    const cloned = await createLocalUpload(file, ownerId);
+    await processLocalMedia(cloned.id);
+    return {
+      id: cloned.id,
+      originalName: cloned.originalName,
+      mimeType: cloned.mimeType,
+    };
+  } catch {
+    const [refreshed] = await db
+      .select({ status: mediaAssets.status })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, mediaId))
+      .limit(1);
+    if (refreshed?.status === "ready" && asset.status !== "ready") {
+      return cloneMediaAsset(mediaId, ownerId);
+    }
+    throw new Error("草稿图片正在处理，暂时不能复制，请稍后再试。");
+  }
 }
 
 export async function reconcilePublishingPosts(mediaIds: string[]) {

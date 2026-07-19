@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
 import { DissolveTextarea } from "@/app/components/DissolveField";
+import { ModalSurface } from "@/app/components/ModalSurface";
 import {
   appendUniqueFiles,
   uploadMediaFiles,
@@ -28,9 +29,9 @@ import { SoftReveal } from "@/app/components/SoftReveal";
 import { TextStateSwap } from "@/app/components/TextStateSwap";
 import type {
   CircleSummary,
+  DraftMedia,
   FeedPost,
   FriendSummary,
-  HomeDraft,
   PostVisibility,
 } from "@/lib/content-types";
 
@@ -57,14 +58,13 @@ const managementOptions = [
   { value: "circle", label: "共同管理" },
 ] as const;
 
-type SavedMedia = HomeDraft["media"][number];
+type SavedMedia = DraftMedia;
 
 export function SocialHome({
   currentUser,
   friends,
   boardMedia,
   circles,
-  initialDraft,
   circleList,
   friendList,
   latestContent,
@@ -73,25 +73,24 @@ export function SocialHome({
   friends: FriendSummary[];
   boardMedia: FeedPost["media"];
   circles: CircleSummary[];
-  initialDraft: HomeDraft | null;
   circleList: ReactNode;
   friendList: ReactNode;
   latestContent: ReactNode;
 }) {
   const router = useRouter();
   const reducedMotion = useReducedMotion();
-  const initialPublishSpace = initialDraft?.circleId ? "circle" : "personal";
-  const [body, setBody] = useState(initialDraft?.body ?? "");
+  const [body, setBody] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [savedMedia, setSavedMedia] = useState<SavedMedia[]>(initialDraft?.media ?? []);
-  const [draftId, setDraftId] = useState(initialDraft?.id ?? null);
-  const [visibility, setVisibility] = useState<PostVisibility>(initialDraft?.visibility ?? "friends");
-  const [publishSpace, setPublishSpace] = useState<"personal" | "circle">(initialPublishSpace);
-  const [selectedCircleId, setSelectedCircleId] = useState(initialDraft?.circleId ?? circles[0]?.id ?? "");
+  const [savedMedia, setSavedMedia] = useState<SavedMedia[]>([]);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftUpdatedAt, setDraftUpdatedAt] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<PostVisibility>("friends");
+  const [publishSpace, setPublishSpace] = useState<"personal" | "circle">("personal");
+  const [selectedCircleId, setSelectedCircleId] = useState(circles[0]?.id ?? "");
   const [managementMode, setManagementMode] = useState<"creator" | "circle">(
-    initialDraft?.managementMode ?? "creator",
+    "creator",
   );
-  const [viewerIds, setViewerIds] = useState<string[]>(initialDraft?.viewerIds ?? []);
+  const [viewerIds, setViewerIds] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [draftAction, setDraftAction] = useState<"save" | "discard" | null>(null);
@@ -245,7 +244,9 @@ export function SocialHome({
       viewerIds: publishSpace === "personal" && visibility === "selected" ? viewerIds : [],
       circleId: publishSpace === "circle" ? selectedCircleId : null,
       managementMode,
+      participantIds: publishSpace === "circle" ? [currentUser.id] : [],
       mediaIds,
+      expectedUpdatedAt: id ? draftUpdatedAt ?? undefined : undefined,
     };
   }
 
@@ -255,9 +256,14 @@ export function SocialHome({
       headers: { "content-type": "application/json" },
       body: JSON.stringify(draftPayload(media.map((item) => item.id))),
     });
-    const result = (await response.json()) as { id?: string | null; error?: string };
+    const result = (await response.json()) as {
+      id?: string | null;
+      updatedAt?: string | null;
+      error?: string;
+    };
     if (!response.ok) throw new Error(result.error ?? "草稿保存失败。");
     setDraftId(result.id ?? null);
+    setDraftUpdatedAt(result.updatedAt ?? null);
     return result.id ?? null;
   }
 
@@ -290,6 +296,7 @@ export function SocialHome({
     setFiles([]);
     setSavedMedia([]);
     setDraftId(null);
+    setDraftUpdatedAt(null);
     setViewerIds([]);
     setVisibility("friends");
     setPublishSpace("personal");
@@ -303,16 +310,11 @@ export function SocialHome({
     setPending(true);
     setError("");
     try {
-      if (draftId) {
-        const response = await fetch(`/api/drafts/${draftId}`, { method: "DELETE" });
-        const result = (await response.json()) as { error?: string };
-        if (!response.ok) throw new Error(result.error ?? "草稿删除失败。");
-      }
       resetComposer();
       setDraftDialogOpen(false);
       finishClosingPublisher();
     } catch (discardError) {
-      setError(discardError instanceof Error ? discardError.message : "草稿删除失败。");
+      setError(discardError instanceof Error ? discardError.message : "内容放弃失败。");
       setDraftDialogOpen(false);
     } finally {
       setUploadProgress(null);
@@ -490,7 +492,9 @@ export function SocialHome({
                 onValueChange={setPublishSpace}
                 options={publishSpaceOptions.map((option) => ({
                   ...option,
-                  disabled: option.value === "circle" && circles.length === 0,
+                  disabled:
+                    (option.value === "circle" && circles.length === 0) ||
+                    (Boolean(draftId) && option.value !== publishSpace),
                 }))}
                 value={publishSpace}
               />
@@ -498,7 +502,7 @@ export function SocialHome({
                 <div className="circle-publish-options">
                   <label>
                     发布到
-                    <select onChange={(event) => setSelectedCircleId(event.target.value)} value={selectedCircleId}>
+                    <select disabled={Boolean(draftId)} onChange={(event) => setSelectedCircleId(event.target.value)} value={selectedCircleId}>
                       {circles.map((circle) => <option key={circle.id} value={circle.id}>{circle.name}</option>)}
                     </select>
                   </label>
@@ -650,48 +654,34 @@ export function SocialHome({
         </section>
       </div>
 
-      <AnimatePresence>
-        {draftDialogOpen ? (
-          <motion.div
-            animate={{ opacity: 1 }}
-            className="draft-dialog-backdrop"
-            exit={{ opacity: 0 }}
-            initial={{ opacity: 0 }}
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget && !pending) setDraftDialogOpen(false);
-            }}
-          >
-            <motion.div
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              aria-labelledby="draft-dialog-title"
-              aria-modal="true"
-              className="draft-dialog"
-              exit={{ opacity: 0, scale: 0.98, y: 6 }}
-              initial={{ opacity: 0, scale: 0.98, y: 8 }}
-              role="dialog"
-              transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <h2 id="draft-dialog-title">要保存这条未完成的记录吗？</h2>
-              <p>保存后可以在其他设备上继续写，只有你自己能看到。</p>
-              <div className="draft-dialog-actions">
-                <button autoFocus className="draft-save-action" disabled={pending} onClick={saveAndCloseDraft} type="button">
-                  <TextStateSwap
-                    labels={["保存并收起", "正在保存"]}
-                    text={draftAction === "save" ? "正在保存" : "保存并收起"}
-                  />
-                </button>
-                <button disabled={pending} onClick={discardAndCloseDraft} type="button">
-                  <TextStateSwap
-                    labels={["放弃内容", "正在放弃"]}
-                    text={draftAction === "discard" ? "正在放弃" : "放弃内容"}
-                  />
-                </button>
-                <button disabled={pending} onClick={() => setDraftDialogOpen(false)} type="button">继续编辑</button>
-              </div>
-            </motion.div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      <ModalSurface
+        labelledBy="draft-dialog-title"
+        onRequestClose={() => {
+          if (!pending) setDraftDialogOpen(false);
+        }}
+        open={draftDialogOpen}
+        size="compact"
+      >
+        <div className="draft-dialog">
+          <h2 id="draft-dialog-title">要保存这条未完成的记录吗？</h2>
+          <p>保存后可以在其他设备上继续写，只有你自己能看到。</p>
+          <div className="draft-dialog-actions">
+            <button data-modal-initial-focus className="draft-save-action" disabled={pending} onClick={saveAndCloseDraft} type="button">
+              <TextStateSwap
+                labels={["保存并收起", "正在保存"]}
+                text={draftAction === "save" ? "正在保存" : "保存并收起"}
+              />
+            </button>
+            <button disabled={pending} onClick={discardAndCloseDraft} type="button">
+              <TextStateSwap
+                labels={[draftId ? "放弃本次修改" : "放弃内容", "正在放弃"]}
+                text={draftAction === "discard" ? "正在放弃" : draftId ? "放弃本次修改" : "放弃内容"}
+              />
+            </button>
+            <button disabled={pending} onClick={() => setDraftDialogOpen(false)} type="button">继续编辑</button>
+          </div>
+        </div>
+      </ModalSurface>
     </AppShell>
   );
 }

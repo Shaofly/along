@@ -1,18 +1,44 @@
 export type PostVisibility = "friends" | "selected" | "private";
 
-export type HomeDraft = {
+export type DraftMedia = {
+  id: string;
+  originalName: string;
+  mimeType: string;
+};
+
+export type DraftParticipant = {
+  id: string;
+  name: string;
+  realName: string;
+  isActive: boolean;
+};
+
+export type DraftCircleTarget = {
+  id: string;
+  name: string;
+  status: "active" | "frozen" | "dissolved";
+  isActiveMember: boolean;
+};
+
+export type DraftSummary = {
   id: string;
   body: string;
   visibility: PostVisibility;
   circleId: string | null;
+  circle: DraftCircleTarget | null;
   managementMode: "creator" | "circle";
-  viewerIds: string[];
-  media: Array<{
-    id: string;
-    originalName: string;
-    mimeType: string;
-  }>;
+  media: DraftMedia[];
+  mediaCount: number;
+  canPublish: boolean;
+  unavailableReason: string | null;
+  createdAt: string;
   updatedAt: string;
+};
+
+export type DraftDetail = DraftSummary & {
+  viewerIds: string[];
+  participants: DraftParticipant[];
+  circleMembers: DraftParticipant[];
 };
 
 export type FeedPost = {
@@ -46,6 +72,9 @@ export type FeedPost = {
     mimeType: string;
   }>;
   viewerIds: string[];
+  participantIds: string[];
+  participants: DraftParticipant[];
+  circleMembers: DraftParticipant[];
 };
 
 export type CircleSummary = {

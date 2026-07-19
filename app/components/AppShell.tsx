@@ -1,12 +1,13 @@
 "use client";
 
 import { animate, AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
-import { Bell, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
+import { ArrowLeft, Bell, FilePenLine, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MouseEvent, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
+import { TaskRouteTransitionProvider } from "@/app/components/TaskRouteTransition";
 import { authClient } from "@/lib/auth-client";
 
 export type ShellUser = {
@@ -16,6 +17,7 @@ export type ShellUser = {
   nickname: string | null;
   image: string | null;
   role?: "admin" | "member";
+  draftCount: number;
 };
 
 type PrimaryRoute = "home" | "circles" | "friends" | "profile";
@@ -38,8 +40,28 @@ function routeFor(value: PrimaryRoute, userId: string) {
 function routeFromPath(pathname: string, userId: string): PrimaryRoute {
   if (pathname.startsWith("/circles")) return "circles";
   if (pathname.startsWith("/friends") || pathname.startsWith("/invites")) return "friends";
-  if (pathname === `/profile/${userId}` || pathname === "/profile") return "profile";
+  if (
+    pathname === `/profile/${userId}` ||
+    pathname === "/profile" ||
+    pathname.startsWith("/drafts") ||
+    pathname.startsWith("/compose/personal")
+  ) {
+    return "profile";
+  }
   return "home";
+}
+
+function secondaryRouteTitle(pathname: string) {
+  if (pathname.startsWith("/notifications")) return "通知";
+  if (pathname === "/drafts") return "草稿箱";
+  return null;
+}
+
+function isTaskRoutePath(pathname: string) {
+  return pathname === "/compose/personal"
+    || /^\/circles\/[^/]+\/compose$/.test(pathname)
+    || /^\/drafts\/[^/]+\/edit$/.test(pathname)
+    || /^\/posts\/[^/]+\/edit$/.test(pathname);
 }
 
 function drawerWidth() {
@@ -67,8 +89,13 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const reducedMotion = useReducedMotion();
+  const secondaryTitle = secondaryRouteTitle(pathname);
+  const isSecondaryRoute = secondaryTitle !== null;
+  const isTaskRoute = isTaskRoutePath(pathname);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [secondaryExiting, setSecondaryExiting] = useState(false);
+  const [taskExiting, setTaskExiting] = useState(false);
   const stageX = useMotionValue(0);
   const gestureStart = useRef<{
     captureTarget: HTMLDivElement;
@@ -82,7 +109,8 @@ export function AppShell({
     y: number;
   } | null>(null);
   const suppressStageClick = useRef(false);
-  const navigationTimer = useRef<number | null>(null);
+  const secondaryBackInProgress = useRef(false);
+  const taskExitInProgress = useRef(false);
   const [pendingNavigation, setPendingNavigation] = useState<{
     fromPath: string;
     value: PrimaryRoute;
@@ -102,10 +130,6 @@ export function AppShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => () => {
-    if (navigationTimer.current) window.clearTimeout(navigationTimer.current);
-  }, []);
-
   useEffect(() => {
     const onResize = () => {
       if (drawerOpen && !gestureStart.current) stageX.set(drawerWidth());
@@ -113,6 +137,17 @@ export function AppShell({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [drawerOpen, stageX]);
+
+  useEffect(() => {
+    if (!drawerOpen || !window.matchMedia("(max-width: 700px)").matches) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [drawerOpen]);
 
   function snapStage(open: boolean) {
     const target = open ? drawerWidth() : 0;
@@ -153,11 +188,11 @@ export function AppShell({
     }
     if (value === activeRoute) return;
     setPendingNavigation({ fromPath: pathname, value });
-    if (navigationTimer.current) window.clearTimeout(navigationTimer.current);
-    navigationTimer.current = window.setTimeout(() => router.push(href), 150);
+    router.push(href);
   }
 
   function beginDrawerGesture(event: PointerEvent<HTMLDivElement>) {
+    if (isSecondaryRoute || isTaskRoute) return;
     if (!window.matchMedia("(max-width: 700px)").matches || !event.isPrimary) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable='true'], [data-no-drawer-gesture]")) return;
@@ -189,6 +224,11 @@ export function AppShell({
           gesture.captureTarget.releasePointerCapture(gesture.pointerId);
         }
         snapStage(drawerOpen);
+        return;
+      }
+      if (!drawerOpen && dx < 0) {
+        gestureStart.current = null;
+        snapStage(false);
         return;
       }
       gesture.mode = "horizontal";
@@ -265,16 +305,72 @@ export function AppShell({
     window.location.href = "/";
   }
 
+  function completeSecondaryBack() {
+    if (window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push("/home");
+  }
+
+  function returnFromSecondary() {
+    if (!isSecondaryRoute || secondaryBackInProgress.current) return;
+    secondaryBackInProgress.current = true;
+    setMenuOpen(false);
+
+    const mobile = window.matchMedia("(max-width: 700px)").matches;
+    if (!mobile || reducedMotion) {
+      completeSecondaryBack();
+      return;
+    }
+
+    setSecondaryExiting(true);
+    window.requestAnimationFrame(() => {
+      stageX.stop();
+      stageX.set(0);
+      animate(stageX, window.innerWidth, {
+        duration: 0.28,
+        ease: [0.4, 0, 0.2, 1],
+      }).then(completeSecondaryBack);
+    });
+  }
+
+  function leaveTaskRoute(href: string) {
+    if (!isTaskRoute || taskExitInProgress.current) return;
+    taskExitInProgress.current = true;
+    setMenuOpen(false);
+
+    const mobile = window.matchMedia("(max-width: 700px)").matches;
+    if (!mobile || reducedMotion) {
+      router.push(href);
+      return;
+    }
+
+    setTaskExiting(true);
+    window.requestAnimationFrame(() => {
+      stageX.stop();
+      stageX.set(0);
+      animate(stageX, window.innerWidth, {
+        duration: 0.28,
+        ease: [0.4, 0, 0.2, 1],
+      }).then(() => router.push(href));
+    });
+  }
+
   return (
     <div
-      className={`app-shell${drawerOpen ? " drawer-open" : ""}`}
+      className={`app-shell${drawerOpen ? " drawer-open" : ""}${isSecondaryRoute ? " secondary-route" : ""}${secondaryExiting ? " secondary-exiting" : ""}${isTaskRoute ? " task-route" : ""}${taskExiting ? " task-exiting" : ""}`}
       onClickCapture={handleShellClickCapture}
       onPointerCancel={cancelDrawerGesture}
       onPointerDown={beginDrawerGesture}
       onPointerMove={moveDrawerGesture}
       onPointerUp={finishDrawerGesture}
     >
-      <aside className="mobile-drawer" aria-hidden={!drawerOpen}>
+      <aside
+        aria-hidden={!drawerOpen}
+        className="mobile-drawer"
+        inert={drawerOpen ? undefined : true}
+      >
         <div className="drawer-profile">
           <div className="drawer-avatar"><Avatar user={user} /></div>
           <div>
@@ -292,6 +388,7 @@ export function AppShell({
           ))}
         </nav>
         <div className="drawer-secondary">
+          <Link href="/drafts" onClick={closeDrawer}><FilePenLine size={18} />草稿箱{user.draftCount > 0 ? `（${user.draftCount}）` : ""}</Link>
           <Link href="/notifications" onClick={closeDrawer}><Bell size={18} />通知</Link>
           <Link href={`/profile/${user.id}`} onClick={closeDrawer}><Settings size={18} />个人设置</Link>
           <Link href="/friends" onClick={closeDrawer}><UsersRound size={18} />朋友与邀请</Link>
@@ -306,23 +403,36 @@ export function AppShell({
       >
         <header className="global-header" onClick={(event) => drawerOpen && event.stopPropagation()}>
           <div className="global-header-left">
-            <div className="header-navigation-cluster">
-              <button className="header-avatar" aria-label="打开个人菜单" onClick={() => {
-                if (window.matchMedia("(max-width: 700px)").matches) openDrawer();
-                else setMenuOpen((current) => !current);
-              }} type="button">
-                <Avatar user={user} />
-              </button>
-              <SegmentedControl
-                ariaLabel="主要栏目"
-                className="primary-navigation"
-                onValueChange={navigate}
-                options={primaryOptions}
-                role="tablist"
-                value={activeRoute}
-              />
+            <div className="header-navigation-anchor">
+              {isSecondaryRoute ? (
+                <button
+                  aria-label="返回上一页"
+                  className="header-back-button"
+                  disabled={secondaryExiting}
+                  onClick={returnFromSecondary}
+                  type="button"
+                >
+                  <ArrowLeft aria-hidden="true" size={21} strokeWidth={1.9} />
+                </button>
+              ) : null}
+              <div className="header-navigation-cluster">
+                <button className="header-avatar" aria-label="打开个人菜单" onClick={() => {
+                  if (window.matchMedia("(max-width: 700px)").matches) openDrawer();
+                  else setMenuOpen((current) => !current);
+                }} type="button">
+                  <Avatar user={user} />
+                </button>
+                <SegmentedControl
+                  ariaLabel="主要栏目"
+                  className="primary-navigation"
+                  onValueChange={navigate}
+                  options={primaryOptions}
+                  role="tablist"
+                  value={activeRoute}
+                />
+              </div>
             </div>
-            <span className="mobile-header-name">{user.name}</span>
+            <span className="mobile-header-name">{secondaryTitle ?? user.name}</span>
             <AnimatePresence>
               {menuOpen ? (
                 <motion.div
@@ -334,6 +444,7 @@ export function AppShell({
                 >
                   <div><strong>{user.name}</strong>{user.nickname ? <span>{user.realName}</span> : null}</div>
                   <Link href={`/profile/${user.id}`} onClick={() => setMenuOpen(false)}><UserRound size={17} />我的主页</Link>
+                  <Link href="/drafts" onClick={() => setMenuOpen(false)}><FilePenLine size={17} />草稿箱{user.draftCount > 0 ? `（${user.draftCount}）` : ""}</Link>
                   <Link href="/notifications" onClick={() => setMenuOpen(false)}><Bell size={17} />通知</Link>
                   <Link href="/friends" onClick={() => setMenuOpen(false)}><UsersRound size={17} />朋友与邀请</Link>
                   <button onClick={signOut} type="button"><LogOut size={17} />退出登录</button>
@@ -342,11 +453,29 @@ export function AppShell({
             </AnimatePresence>
           </div>
 
-          <Link className="notification-button" href="/notifications" aria-label="查看通知">
-            <Bell size={21} strokeWidth={1.9} />
-          </Link>
+          <div className="header-utility-actions">
+            <Link
+              aria-current={pathname.startsWith("/drafts") ? "page" : undefined}
+              className={`header-utility-button drafts-button${pathname.startsWith("/drafts") ? " active" : ""}`}
+              href="/drafts"
+              aria-label={user.draftCount > 0 ? `查看草稿箱，共 ${user.draftCount} 条` : "查看草稿箱"}
+            >
+              <FilePenLine size={20} strokeWidth={1.9} />
+              {user.draftCount > 0 ? <span>{user.draftCount > 99 ? "99+" : user.draftCount}</span> : null}
+            </Link>
+            <Link
+              aria-current={pathname.startsWith("/notifications") ? "page" : undefined}
+              className={`header-utility-button notification-button${pathname.startsWith("/notifications") ? " active" : ""}`}
+              href="/notifications"
+              aria-label="查看通知"
+            >
+              <Bell size={21} strokeWidth={1.9} />
+            </Link>
+          </div>
         </header>
-        <main className={`app-page ${pageClassName}`.trim()}>{children}</main>
+        <TaskRouteTransitionProvider value={leaveTaskRoute}>
+          <main className={`app-page ${pageClassName}`.trim()} key={pathname}>{children}</main>
+        </TaskRouteTransitionProvider>
       </motion.div>
     </div>
   );

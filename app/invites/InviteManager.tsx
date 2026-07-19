@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Friend = { id: string; name: string; email: string };
 type PendingInvitation = {
@@ -30,11 +31,13 @@ export function InviteManager({
   pendingInvitations: PendingInvitation[];
   createdInvitations: CreatedInvitation[];
 }) {
+  const router = useRouter();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
   async function createInvitation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setError("");
     setPending(true);
     const form = new FormData(event.currentTarget);
@@ -56,7 +59,8 @@ export function InviteManager({
       return;
     }
 
-    window.location.reload();
+    formElement.reset();
+    router.refresh();
   }
 
   async function approveInvitation(id: string) {
@@ -71,7 +75,7 @@ export function InviteManager({
       setError(result.error ?? "确认失败。");
       return;
     }
-    window.location.reload();
+    router.refresh();
   }
 
   return (

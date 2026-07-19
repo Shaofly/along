@@ -4,6 +4,8 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { AnimatedReveal } from "@/app/components/SegmentedControl";
+import { TextStateSwap } from "@/app/components/TextStateSwap";
 import type { CircleSummary, FriendSummary } from "@/lib/content-types";
 
 type CircleAction = {
@@ -60,6 +62,7 @@ export function CirclesClient({
 
   async function createCircle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setPending(true);
     setError("");
     const form = new FormData(event.currentTarget);
@@ -78,6 +81,7 @@ export function CirclesClient({
       setError(result.error ?? "创建圈子失败。");
       return;
     }
+    formElement.reset();
     setShowCreate(false);
     setSelectedFriends([]);
     router.refresh();
@@ -218,12 +222,16 @@ export function CirclesClient({
             <h1>一起留下来的地方</h1>
           </div>
           <button className="soft-command" onClick={() => setShowCreate((value) => !value)} type="button">
-            {showCreate ? "收起" : "建立圈子"}
+            <TextStateSwap
+              labels={["建立圈子", "收起"]}
+              text={showCreate ? "收起" : "建立圈子"}
+            />
           </button>
         </div>
 
-        {showCreate ? (
-          <form className="circle-create-form" onSubmit={createCircle}>
+        <AnimatedReveal className="inline-panel-reveal" show={showCreate}>
+          <div className="t-panel-slide inline-form-panel" data-open={showCreate}>
+            <form className="circle-create-form" onSubmit={createCircle}>
             <label>
               圈子名称
               <input maxLength={40} name="name" placeholder="比如：晚饭后散步小队" required />
@@ -255,8 +263,9 @@ export function CirclesClient({
             <button className="publish-button" disabled={pending || selectedFriends.length === 0} type="submit">
               {pending ? "正在发出" : "发出 24 小时内有效的邀请"}
             </button>
-          </form>
-        ) : null}
+            </form>
+          </div>
+        </AnimatedReveal>
 
         {error && !showCreate ? <p className="composer-error">{error}</p> : null}
         <div className="circle-list">

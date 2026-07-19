@@ -42,12 +42,12 @@ type ViewerRect = {
   width: number;
 };
 
-type CloseVisual = {
+type ImageMorphVisual = {
   from: ViewerRect;
-  scale: number;
+  fromRadius: number;
   src: string;
-  x: number;
-  y: number;
+  to: ViewerRect;
+  toRadius: number;
 };
 
 const MOBILE_MIN_SCALE = 1;
@@ -57,6 +57,7 @@ const DESKTOP_MAX_SCALE = 10;
 const DESKTOP_FIT_PERCENT = 50;
 const SLIDE_DURATION = 280;
 const CLOSE_DURATION = 280;
+const REDUCED_MOTION_CLOSE_SETTLE_DURATION = 32;
 const HORIZONTAL_GESTURE_RATIO = 1.6;
 const DISMISS_DISTANCE = 104;
 const DISMISS_VELOCITY = 0.55;
@@ -121,10 +122,8 @@ function visibleImageRect(image: HTMLImageElement): ViewerRect {
   };
 }
 
-function entranceTransform(source: DOMRect | null, reducedMotion: boolean | null) {
-  if (!source || typeof window === "undefined" || reducedMotion) {
-    return { opacity: 1, scale: 1, x: 0, y: 0 };
-  }
+function viewerImageRect(source: ViewerRect | null) {
+  if (!source || typeof window === "undefined") return null;
 
   const mobile = window.matchMedia("(max-width: 700px)").matches;
   const shellWidth = mobile
@@ -149,14 +148,19 @@ function entranceTransform(source: DOMRect | null, reducedMotion: boolean | null
   const targetHeight = source.height * fit;
 
   return {
-    opacity: 1,
-    scale: Math.max(0.04, Math.min(
-      source.width / Math.max(1, targetWidth),
-      source.height / Math.max(1, targetHeight),
-    )),
-    x: source.left + source.width / 2 - window.innerWidth / 2,
-    y: source.top + source.height / 2 - window.innerHeight / 2,
+    height: targetHeight,
+    left: (window.innerWidth - targetWidth) / 2,
+    top: (window.innerHeight - targetHeight) / 2,
+    width: targetWidth,
   };
+}
+
+function elementRadius(element: HTMLElement | null, fallback: number) {
+  if (!element) return fallback;
+  const radius = Number.parseFloat(
+    window.getComputedStyle(element).borderTopLeftRadius,
+  );
+  return Number.isFinite(radius) ? radius : fallback;
 }
 
 export function PhotoViewer({
@@ -165,6 +169,7 @@ export function PhotoViewer({
   author,
   body,
   originRect,
+  originRadius,
   onClose,
 }: {
   photos: ViewerPhoto[];
@@ -172,6 +177,7 @@ export function PhotoViewer({
   author: { name: string; image: string | null };
   body: string;
   originRect: DOMRect | null;
+  originRadius: number;
   onClose: () => void;
 }) {
   const reducedMotion = useReducedMotion();
@@ -188,7 +194,7 @@ export function PhotoViewer({
   const [entranceComplete, setEntranceComplete] = useState(
     Boolean(reducedMotion || !originRect),
   );
-  const [closeVisual, setCloseVisual] = useState<CloseVisual | null>(null);
+  const [closeVisual, setCloseVisual] = useState<ImageMorphVisual | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [previewReady, setPreviewReady] = useState<Record<string, boolean>>({});
   const [hdUrls, setHdUrls] = useState<Record<string, string>>({});
@@ -196,7 +202,6 @@ export function PhotoViewer({
   const [hdProgress, setHdProgress] = useState<number | null>(null);
   const hdUrlsRef = useRef<Record<string, string>>({});
   const hdRequestRef = useRef<XMLHttpRequest | null>(null);
-  const clickGuardCleanupRef = useRef<(() => void) | null>(null);
   const dismissResetTimerRef = useRef(0);
   const pointers = useRef(new Map<number, Point>());
   const gesture = useRef<{
@@ -215,10 +220,12 @@ export function PhotoViewer({
   const closingRef = useRef(false);
   const closeAfterHistoryRef = useRef(false);
   const closeTimerRef = useRef(0);
+  const closeCompletedRef = useRef(false);
   const historyToken = useId();
   const photo = photos[index];
   const photoIdRef = useRef(photo?.id ?? "");
   const originRectRef = useRef(originRect);
+  const originRadiusRef = useRef(originRadius);
   const hdUrl = photo ? hdUrls[photo.id] : undefined;
   const minScale = isMobile ? MOBILE_MIN_SCALE : DESKTOP_MIN_SCALE;
   const maxScale = isMobile ? MOBILE_MAX_SCALE : DESKTOP_MAX_SCALE;
@@ -227,6 +234,7 @@ export function PhotoViewer({
   useEffect(() => { offsetRef.current = offset; }, [offset]);
   useEffect(() => { photoIdRef.current = photo?.id ?? ""; }, [photo?.id]);
   useEffect(() => { originRectRef.current = originRect; }, [originRect]);
+  useEffect(() => { originRadiusRef.current = originRadius; }, [originRadius]);
   useEffect(() => {
     hdUrlsRef.current = hdUrls;
   }, [hdUrls]);
@@ -234,7 +242,6 @@ export function PhotoViewer({
     hdRequestRef.current?.abort();
     window.clearTimeout(closeTimerRef.current);
     window.clearTimeout(dismissResetTimerRef.current);
-    clickGuardCleanupRef.current?.();
     Object.values(hdUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
   }, []);
   useEffect(() => {
@@ -253,24 +260,11 @@ export function PhotoViewer({
     return () => media.removeEventListener("change", update);
   }, []);
 
-  const guardNextDocumentClick = useCallback(() => {
-    clickGuardCleanupRef.current?.();
-    let timer = 0;
-    const cleanup = () => {
-      document.removeEventListener("click", blockClick, true);
-      window.clearTimeout(timer);
-      if (clickGuardCleanupRef.current === cleanup) clickGuardCleanupRef.current = null;
-    };
-    const blockClick = (event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      cleanup();
-    };
-    document.addEventListener("click", blockClick, true);
-    timer = window.setTimeout(cleanup, 500);
-    clickGuardCleanupRef.current = cleanup;
-  }, []);
+  const completeClose = useCallback(() => {
+    if (closeCompletedRef.current) return;
+    closeCompletedRef.current = true;
+    onClose();
+  }, [onClose]);
 
   const finishClose = useCallback((historyAlreadyChanged: boolean) => {
     if (
@@ -279,10 +273,11 @@ export function PhotoViewer({
     ) {
       closeAfterHistoryRef.current = true;
       window.history.back();
+      completeClose();
       return;
     }
-    onClose();
-  }, [historyToken, onClose]);
+    completeClose();
+  }, [completeClose, historyToken]);
 
   const animateClose = useCallback((historyAlreadyChanged = false) => {
     if (closingRef.current) return;
@@ -303,36 +298,39 @@ export function PhotoViewer({
     const currentOrigin = document.querySelector<HTMLElement>(
       `[data-photo-origin="${photoIdRef.current}"]`,
     );
-    const targetRect = currentOrigin?.getBoundingClientRect() ?? originRectRef.current;
+    const targetElement = currentOrigin?.querySelector<HTMLElement>("img") ?? currentOrigin;
+    const targetRect = targetElement?.getBoundingClientRect() ?? originRectRef.current;
     if (currentImage && targetRect && !reducedMotion) {
       const from = visibleImageRect(currentImage);
       setCloseVisual({
         from,
-        scale: Math.max(
-          0.04,
-          Math.min(targetRect.width / from.width, targetRect.height / from.height),
-        ),
+        fromRadius: elementRadius(currentImage, 0),
         src: currentImage.currentSrc || currentImage.src,
-        x: targetRect.left + targetRect.width / 2 - (from.left + from.width / 2),
-        y: targetRect.top + targetRect.height / 2 - (from.top + from.height / 2),
+        to: {
+          height: targetRect.height,
+          left: targetRect.left,
+          top: targetRect.top,
+          width: targetRect.width,
+        },
+        toRadius: elementRadius(targetElement, originRadiusRef.current),
       });
     }
 
     window.clearTimeout(closeTimerRef.current);
     closeTimerRef.current = window.setTimeout(
       () => finishClose(historyAlreadyChanged),
-      reducedMotion ? 0 : CLOSE_DURATION,
+      reducedMotion ? REDUCED_MOTION_CLOSE_SETTLE_DURATION : CLOSE_DURATION,
     );
   }, [finishClose, reducedMotion]);
 
   const closeFromHistory = useCallback(() => {
     if (closeAfterHistoryRef.current) {
       closeAfterHistoryRef.current = false;
-      onClose();
+      completeClose();
       return;
     }
     animateClose(true);
-  }, [animateClose, onClose]);
+  }, [animateClose, completeClose]);
 
   const requestClose = useCallback(() => {
     animateClose(false);
@@ -547,7 +545,6 @@ export function PhotoViewer({
       if (shouldDismiss(dx, dy, elapsed)) {
         event.preventDefault();
         event.stopPropagation();
-        guardNextDocumentClick();
         animateClose(false);
       } else {
         reboundDismiss();
@@ -558,7 +555,6 @@ export function PhotoViewer({
       if (isMobile || clickedOutsideStage) {
         event.preventDefault();
         event.stopPropagation();
-        guardNextDocumentClick();
         requestClose();
       }
     }
@@ -615,10 +611,24 @@ export function PhotoViewer({
     request.send();
   }
 
-  const entrance = useMemo(
-    () => entranceTransform(originRect, reducedMotion),
-    [originRect, reducedMotion],
-  );
+  const openingVisual = useMemo<ImageMorphVisual | null>(() => {
+    if (!photo || !originRect || reducedMotion) return null;
+    const to = viewerImageRect(originRect);
+    if (!to) return null;
+    return {
+      from: {
+        height: originRect.height,
+        left: originRect.left,
+        top: originRect.top,
+        width: originRect.width,
+      },
+      fromRadius: originRadius,
+      src: photo.thumbnailSrc,
+      to,
+      toRadius: 0,
+    };
+  }, [originRadius, originRect, photo, reducedMotion]);
+  const entranceFinished = entranceComplete || Boolean(reducedMotion);
 
   const visiblePhotos = useMemo(() => {
     if (photos.length === 1) return [{ position: 0, photo: photos[0] }];
@@ -638,6 +648,11 @@ export function PhotoViewer({
       className={`photo-viewer${isClosing ? " is-closing" : ""}${isDismissing ? " is-dismissing" : ""}`}
       data-no-drawer-gesture
       initial={{ backgroundColor: "rgba(24, 28, 26, 0)" }}
+      onClickCapture={(event) => {
+        if (!isClosing) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onPointerCancel={onPointerUp}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -665,7 +680,7 @@ export function PhotoViewer({
             backgroundColor: `rgba(15, 19, 17, ${0.72 * backdropOpacity})`,
             opacity: isClosing ? 0 : 1,
           }}
-          className={`photo-viewer-stage-wrap${imageTransitioning ? " is-image-transitioning" : ""}`}
+          className={`photo-viewer-stage-wrap${imageTransitioning ? " is-image-transitioning" : ""}${!entranceFinished ? " is-entering" : ""}`}
           initial={{ backgroundColor: "rgba(15, 19, 17, 0)", opacity: 1 }}
           ref={stageRef}
           transition={{
@@ -679,7 +694,7 @@ export function PhotoViewer({
               onTransitionEnd={onTrackTransitionEnd}
               style={{
                 transform: photos.length > 1
-                  ? `translate3d(calc(-33.333333% + ${slideX}px), 0, 0)`
+                  ? `translate3d(calc(-100% + ${slideX}px), 0, 0)`
                   : "translate3d(0, 0, 0)",
               }}
             >
@@ -688,18 +703,7 @@ export function PhotoViewer({
                   className={`photo-viewer-slide${position === 0 ? " is-current" : ""}`}
                   key={`${visiblePhoto.id}-${position}`}
                 >
-                  <motion.div
-                    animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-                    className="photo-viewer-image-entrance"
-                    initial={position === 0 && !entranceComplete ? entrance : false}
-                    onAnimationComplete={() => {
-                      if (position === 0 && !entranceComplete) setEntranceComplete(true);
-                    }}
-                    transition={{
-                      duration: reducedMotion || entranceComplete ? 0 : 0.32,
-                      ease: [0.22, 1, 0.36, 1],
-                    }}
-                  >
+                  <div className="photo-viewer-image-entrance">
                     <div
                       className="photo-viewer-image-stack"
                       style={position === 0
@@ -740,7 +744,7 @@ export function PhotoViewer({
                         />
                       ) : null}
                     </div>
-                  </motion.div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -790,28 +794,73 @@ export function PhotoViewer({
         ) : null}
       </div>
 
+      {openingVisual && !entranceFinished && !isClosing ? (
+        <motion.div
+          animate={{
+            borderRadius: [
+              openingVisual.fromRadius,
+              openingVisual.toRadius,
+              openingVisual.toRadius,
+            ],
+            height: openingVisual.to.height,
+            left: openingVisual.to.left,
+            top: openingVisual.to.top,
+            width: openingVisual.to.width,
+          }}
+          className="photo-viewer-open-visual"
+          initial={{
+            borderRadius: openingVisual.fromRadius,
+            height: openingVisual.from.height,
+            left: openingVisual.from.left,
+            top: openingVisual.from.top,
+            width: openingVisual.from.width,
+          }}
+          onAnimationComplete={() => setEntranceComplete(true)}
+          transition={{
+            duration: 0.32,
+            ease: [0.22, 1, 0.36, 1],
+            borderRadius: {
+              duration: 0.32,
+              ease: [0.4, 0, 0.2, 1],
+              times: [0, 0.618, 1],
+            },
+          }}
+        >
+          <img alt="" aria-hidden="true" draggable={false} src={openingVisual.src} />
+        </motion.div>
+      ) : null}
+
       {closeVisual ? (
         <motion.div
           animate={{
+            borderRadius: [
+              closeVisual.fromRadius,
+              closeVisual.fromRadius,
+              closeVisual.toRadius,
+            ],
+            height: closeVisual.to.height,
+            left: closeVisual.to.left,
             opacity: [1, 1, 0],
-            scale: closeVisual.scale,
-            x: closeVisual.x,
-            y: closeVisual.y,
+            top: closeVisual.to.top,
+            width: closeVisual.to.width,
           }}
           className="photo-viewer-close-visual"
           initial={{
+            borderRadius: closeVisual.fromRadius,
             height: closeVisual.from.height,
             left: closeVisual.from.left,
             opacity: 1,
-            scale: 1,
             top: closeVisual.from.top,
             width: closeVisual.from.width,
-            x: 0,
-            y: 0,
           }}
           transition={{
             duration: reducedMotion ? 0 : CLOSE_DURATION / 1000,
             ease: [0.22, 1, 0.36, 1],
+            borderRadius: {
+              duration: reducedMotion ? 0 : CLOSE_DURATION / 1000,
+              ease: [0.4, 0, 0.2, 1],
+              times: [0, 0.382, 1],
+            },
             opacity: { times: [0, 0.74, 1] },
           }}
         >

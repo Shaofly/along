@@ -4,13 +4,14 @@ import { notFound, redirect } from "next/navigation";
 
 import { PostStream } from "@/app/components/PostStream";
 import { AppShell } from "@/app/components/AppShell";
+import { ComposerLauncher } from "@/app/components/ComposerLauncher";
 import { auth } from "@/lib/auth";
 import { getCircleDetail } from "@/lib/circles";
 import { getCircleArchivePosts, getVisiblePosts } from "@/lib/content";
+import { getDraftList } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
-import { CircleComposer } from "./CircleComposer";
 import { CircleReadMarker } from "./CircleReadMarker";
 
 export const dynamic = "force-dynamic";
@@ -35,9 +36,12 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
     getFriends(session.user.id),
   ]);
   if (!circle || !currentUser) notFound();
-  const posts = circle.isActive
-    ? await getVisiblePosts(session.user.id, { circleId: id, limit: 40 })
-    : await getCircleArchivePosts(session.user.id, id, 40);
+  const [posts, circleDrafts] = await Promise.all([
+    circle.isActive
+      ? getVisiblePosts(session.user.id, { circleId: id, limit: 40 })
+      : getCircleArchivePosts(session.user.id, id, 40),
+    getDraftList(session.user.id, { circleId: id, limit: 1 }),
+  ]);
   const visibleMembers = circle.isArchived
     ? circle.members
     : circle.members.filter((member) => member.isActive);
@@ -71,16 +75,30 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
           </section>
 
           {circle.isActive ? (
-            <CircleComposer
-              circleId={circle.id}
-              circleName={circle.name}
-              currentUserId={session.user.id}
-              members={visibleMembers.map((member) => ({
-                id: member.id,
-                name: member.name,
-                realName: member.realName,
-              }))}
-            />
+            <div className="circle-publish-entry">
+              <div>
+                <strong>留下一条新的圈子动态</strong>
+                <span>桌面端会打开编辑器，手机端进入独立发布页。</span>
+              </div>
+              {circleDrafts.total > 0 ? (
+                <Link href={`/drafts?circleId=${circle.id}`}>
+                  草稿 {circleDrafts.total}
+                </Link>
+              ) : null}
+              <ComposerLauncher
+                circleMembers={visibleMembers.map((member) => ({
+                  id: member.id,
+                  name: member.name,
+                  realName: member.realName,
+                  isActive: true,
+                }))}
+                currentUserId={session.user.id}
+                friends={friends}
+                mobileHref={`/circles/${circle.id}/compose`}
+                returnHref={`/circles/${circle.id}`}
+                target={{ kind: "circle", id: circle.id, name: circle.name }}
+              />
+            </div>
           ) : (
             <div className="circle-state-note">
               <strong>

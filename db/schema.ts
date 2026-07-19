@@ -737,6 +737,11 @@ export const drafts = pgTable(
   },
   (table) => [
     index("drafts_author_updated_idx").on(table.authorId, table.updatedAt),
+    index("drafts_author_circle_updated_idx").on(
+      table.authorId,
+      table.circleId,
+      table.updatedAt,
+    ),
     index("drafts_circle_idx").on(table.circleId),
     check("drafts_body_length", sql`char_length(${table.body}) <= 5000`),
     check("drafts_timestamps_ordered", sql`${table.updatedAt} >= ${table.createdAt}`),
@@ -764,6 +769,22 @@ export const draftViewers = pgTable(
   (table) => [
     primaryKey({ columns: [table.draftId, table.userId] }),
     index("draft_viewers_user_idx").on(table.userId),
+  ],
+);
+
+export const draftParticipants = pgTable(
+  "draft_participants",
+  {
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.draftId, table.userId] }),
+    index("draft_participants_user_idx").on(table.userId, table.draftId),
   ],
 );
 

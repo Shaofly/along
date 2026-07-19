@@ -33,6 +33,7 @@ type VisiblePostOptions = {
   authorId?: string;
   profileId?: string;
   circleId?: string;
+  postId?: string;
   limit?: number;
 };
 
@@ -163,6 +164,7 @@ export async function getVisiblePosts(
         profileCondition,
         options.authorId ? eq(posts.authorId, options.authorId) : undefined,
         options.circleId ? eq(posts.circleId, options.circleId) : undefined,
+        options.postId ? eq(posts.id, options.postId) : undefined,
       ),
     )
     .orderBy(desc(posts.createdAt))
@@ -170,7 +172,7 @@ export async function getVisiblePosts(
 
   if (rows.length === 0) return [];
   const postIds = rows.map((row) => row.id);
-  const [mediaRows, viewerRows] = await Promise.all([
+  const [mediaRows, viewerRows, participantRows] = await Promise.all([
     db
       .select({
         postId: postMedia.postId,
@@ -187,7 +189,41 @@ export async function getVisiblePosts(
       .select({ postId: postViewers.postId, userId: postViewers.userId })
       .from(postViewers)
       .where(inArray(postViewers.postId, postIds)),
+    db
+      .select({
+        postId: postParticipants.postId,
+        userId: postParticipants.userId,
+        name: user.name,
+        realName: user.realName,
+      })
+      .from(postParticipants)
+      .innerJoin(user, eq(postParticipants.userId, user.id))
+      .where(inArray(postParticipants.postId, postIds)),
   ]);
+  const rowCircleIds = [
+    ...new Set(
+      rows
+        .map((row) => row.circleId)
+        .filter((circleId): circleId is string => Boolean(circleId)),
+    ),
+  ];
+  const activeCircleMemberRows = rowCircleIds.length
+    ? await db
+        .select({
+          circleId: circleMemberRelations.circleId,
+          id: user.id,
+          name: user.name,
+          realName: user.realName,
+        })
+        .from(circleMemberRelations)
+        .innerJoin(user, eq(circleMemberRelations.userId, user.id))
+        .where(
+          and(
+            inArray(circleMemberRelations.circleId, rowCircleIds),
+            isNotNull(circleMemberRelations.activePeriodId),
+          ),
+        )
+    : [];
   const editorIds = [
     ...new Set(
       rows
@@ -209,6 +245,35 @@ export async function getVisiblePosts(
     const list = viewersByPost.get(viewer.postId) ?? [];
     list.push(viewer.userId);
     viewersByPost.set(viewer.postId, list);
+  }
+  const membersByCircle = new Map<string, FeedPost["circleMembers"]>();
+  for (const member of activeCircleMemberRows) {
+    const list = membersByCircle.get(member.circleId) ?? [];
+    list.push({
+      id: member.id,
+      name: member.name,
+      realName: member.realName,
+      isActive: true,
+    });
+    membersByCircle.set(member.circleId, list);
+  }
+  const postCircleIds = new Map(rows.map((row) => [row.id, row.circleId]));
+  const participantsByPost = new Map<string, FeedPost["participants"]>();
+  for (const participant of participantRows) {
+    const circleId = postCircleIds.get(participant.postId);
+    const activeMemberIds = new Set(
+      circleId
+        ? (membersByCircle.get(circleId) ?? []).map((member) => member.id)
+        : [],
+    );
+    const list = participantsByPost.get(participant.postId) ?? [];
+    list.push({
+      id: participant.userId,
+      name: participant.name,
+      realName: participant.realName,
+      isActive: activeMemberIds.has(participant.userId),
+    });
+    participantsByPost.set(participant.postId, list);
   }
 
   return rows.map((row) => {
@@ -252,6 +317,17 @@ export async function getVisiblePosts(
         !isCirclePost && row.authorId === viewerId
           ? viewersByPost.get(row.id) ?? []
           : [],
+      participantIds: isCirclePost
+        ? (participantsByPost.get(row.id) ?? []).map(
+            (participant) => participant.id,
+          )
+        : [],
+      participants: isCirclePost
+        ? participantsByPost.get(row.id) ?? []
+        : [],
+      circleMembers: row.circleId
+        ? membersByCircle.get(row.circleId) ?? []
+        : [],
     };
   });
 }
@@ -357,7 +433,15 @@ export async function getCircleArchivePosts(
     isHistorical: true,
     media: mediaByPost.get(row.id) ?? [],
     viewerIds: [],
+    participantIds: [],
+    participants: [],
+    circleMembers: [],
   }));
+}
+
+export async function getEditablePost(viewerId: string, postId: string) {
+  const [post] = await getVisiblePosts(viewerId, { postId, limit: 1 });
+  return post?.canEdit ? post : null;
 }
 
 export async function canViewPost(viewerId: string, postId: string) {

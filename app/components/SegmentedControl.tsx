@@ -41,8 +41,14 @@ export function AnimatedReveal({
         reduceMotion
           ? { duration: 0 }
           : {
-              height: { duration: 0.36, ease: [0.22, 1, 0.36, 1] },
-              opacity: { duration: 0.2, ease: "easeOut" },
+              height: {
+                duration: show ? 0.4 : 0.35,
+                ease: [0.22, 1, 0.36, 1],
+              },
+              opacity: {
+                duration: show ? 0.25 : 0.15,
+                ease: [0.22, 1, 0.36, 1],
+              },
             }
       }
     >

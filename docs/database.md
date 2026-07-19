@@ -11,7 +11,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 持久圈子成员关系与多次成员周期 | `已实现` | `circle_member_relations`、`circle_membership_periods`、`lib/circles.ts` | 活跃状态通过当前周期指针加速查询 |
 | 圈子冻结、恢复与到期硬删除 | `已实现` | `circles.frozen_at`、`delete_at`、`recoverable_by_user_id` | 依赖内部维护任务按时执行 |
 | 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
-| 圈子动态参与者 | `部分实现` | `post_participants`、发布与编辑接口 | 首页圈子发布路径、草稿和编辑弹窗仍需补齐 |
+| 圈子动态与草稿参与者 | `已实现` | `post_participants`、`draft_participants`、完整发布器与发布、编辑接口 | 首页快捷发布器按产品规则不提供参与者选择 |
 | 地点与地图表 | `已确认设计` | [地图与地点功能](features/map.md) | 当前 Schema 尚无地点表 |
 | 评论、回应与完整通知 | `未来设想` | 产品规则已有方向 | 当前 Schema 尚无完整数据模型 |
 
@@ -22,7 +22,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 认证 | `user`、`session`、`account`、`verification` |
 | 邀请与关系 | `invitations`、`invitation_sponsors`、`friendships`、`friend_remarks` |
 | 小圈子 | `circle_creation_requests`、`circle_creation_invitees`、`circles`、`circle_member_relations`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
-| 内容 | `posts`、`post_viewers`、`post_participants`、`drafts`、`draft_viewers` |
+| 内容 | `posts`、`post_viewers`、`post_participants`、`drafts`、`draft_viewers`、`draft_participants` |
 | 退出档案 | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` |
 | 媒体 | `media_assets`、`media_variants`、`media_upload_sessions`、`media_processing_jobs`、`post_media`、`draft_media` |
 
@@ -38,6 +38,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - `circle_membership_periods.circle_nickname` 保存该次成员期的圈子昵称。退出与再次加入是不同成员期，新周期不会继承旧值；页面只使用当前活跃周期的圈子昵称，已经结束的周期不再向用户展示旧昵称。
 - `circle_membership_periods.last_viewed_at` 保存该次活跃成员期最近真正进入圈子的时间；退出后旧周期不再更新，再次加入从新周期重新计算未读。
 - `post_participants` 保存圈子动态明确标记的参与者。作者必须是参与者；编辑者、媒体上传者和普通可见者不会自动成为参与者。
+- `draft_participants` 保存圈子草稿尚未发布的参与者选择。草稿作者始终在其中；退出成员可以保留在旧草稿里供作者识别，但发布前必须移除。
 - `user.bio` 是个人简介的唯一字段，首页可以把它按单行个性签名展示，不增加重复的 `signature` 字段。
 - 所有姓名字段在写入时去除首尾空白；真名不得为空，昵称、备注和圈子昵称为空字符串时统一转为 `NULL`。
 
@@ -72,7 +73,9 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 圈子动态发布、编辑、删除、媒体发布状态结算与退出档案快照使用相同的圈子行锁顺序。动态编辑还会锁定目标动态、在锁内比较客户端看到的`updated_at（最后编辑时间）`，并使用带旧版本条件的`UPDATE ... RETURNING`阻止并发覆盖。
 - 最后一位活跃成员退出时，事务会让所有未完成加入提案进入`invalidated（已失效）`并冻结圈子。后台在`delete_at（删除时间）`后级联删除正式圈子和全部历史关系；删除时间到达后业务接口不再允许恢复，不能依赖清理任务是否已经运行判断权限。
 - 个人内容不能使用圈内共同管理，圈子内容在通用可见范围字段中必须保持 private，由圈子成员周期单独授权。
-- 草稿沿用正式内容的可见范围与管理方式约束，但始终只允许作者通过草稿接口读取；指定查看者和圈子仅用于恢复发布设置，不会让其他人提前看到草稿。
+- 草稿沿用正式内容的可见范围与管理方式约束，但始终只允许作者通过草稿接口读取；指定查看者、参与者和圈子仅用于恢复发布设置，不会让其他人提前看到草稿。
+- 同一作者和同一发布目标可以同时存在多条草稿，不建立“作者 + 目标”唯一索引。草稿列表按个人`updated_at（最后更新时间）`倒序分页；首页不会根据该顺序擅自恢复某一条。
+- 草稿更新在事务中锁定目标行并比较客户端看到的`updated_at`。发生冲突时原行不会被覆盖；另存操作为已关联媒体创建新的逻辑资源和私有变体，避免两条草稿争用一份只能发布一次的媒体关系。
 - 每个媒体资源最多关联一条草稿，草稿内位置保持 0 至 19 唯一；草稿被放弃时，未进入正式内容的私有媒体一并清理，发布成功时只删除草稿关系而保留正式媒体。
 - 正文长度、媒体字节数和单条内容的媒体排序位置有数据库级边界。
 - `media_assets` 是逻辑资源，`media_variants` 以“媒体 + 变体类型”为主键保存 `thumbnail`、`preview`、`hd` 三个正式对象。

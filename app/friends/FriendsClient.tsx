@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element -- Private avatar URLs are authenticated and not known to Next Image. */
 
 import { Check, Pencil, Search, UserPlus, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -19,6 +20,7 @@ export function FriendsClient({
   friends: FriendSummary[];
 }) {
   const router = useRouter();
+  const reducedMotion = useReducedMotion();
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [remark, setRemark] = useState("");
@@ -89,7 +91,7 @@ export function FriendsClient({
         {visibleFriends.length ? (
           <div className="friend-directory-list">
             {visibleFriends.map((friend) => (
-              <article className="friend-directory-row" key={friend.id}>
+              <motion.article className="friend-directory-row" key={friend.id} layout={!reducedMotion}>
                 <Link className="friend-directory-main" href={`/profile/${friend.id}`}>
                   <span className="friend-avatar">
                     {friend.image ? <img alt="" src={friend.image} /> : friend.displayName.slice(0, 1)}
@@ -99,16 +101,38 @@ export function FriendsClient({
                     {friend.displayName !== friend.identityName ? <small>{friend.identityName}</small> : friend.nickname ? <small>真名：{friend.realName}</small> : null}
                   </span>
                 </Link>
-                {editingId === friend.id ? (
-                  <form className="friend-remark-form" onSubmit={(event) => saveRemark(event, friend.id)}>
-                    <input autoFocus maxLength={40} onChange={(event) => setRemark(event.target.value)} placeholder="只对你显示的备注" value={remark} />
-                    <button aria-label="保存备注" disabled={pending} type="submit"><Check size={18} /></button>
-                    <button aria-label="取消修改" onClick={() => setEditingId(null)} type="button"><X size={18} /></button>
-                  </form>
-                ) : (
-                  <button className="icon-command" aria-label={`修改 ${friend.identityName} 的备注`} onClick={() => beginRemark(friend)} type="button"><Pencil size={17} /></button>
-                )}
-              </article>
+                <AnimatePresence initial={false} mode="wait">
+                  {editingId === friend.id ? (
+                    <motion.form
+                      animate={{ opacity: 1, scale: 1, x: 0 }}
+                      className="friend-remark-form"
+                      exit={{ opacity: 0, scale: 0.98, x: 4 }}
+                      initial={{ opacity: 0, scale: 0.98, x: 4 }}
+                      key="editor"
+                      onSubmit={(event) => saveRemark(event, friend.id)}
+                      transition={{ duration: reducedMotion ? 0 : 0.15, ease: [0.22, 1, 0.36, 1] }}
+                    >
+                      <input autoFocus maxLength={40} onChange={(event) => setRemark(event.target.value)} placeholder="只对你显示的备注" value={remark} />
+                      <button aria-label="保存备注" disabled={pending} type="submit"><Check size={18} /></button>
+                      <button aria-label="取消修改" onClick={() => setEditingId(null)} type="button"><X size={18} /></button>
+                    </motion.form>
+                  ) : (
+                    <motion.button
+                      animate={{ opacity: 1, scale: 1, x: 0 }}
+                      className="icon-command"
+                      exit={{ opacity: 0, scale: 0.98, x: -4 }}
+                      initial={{ opacity: 0, scale: 0.98, x: -4 }}
+                      key="command"
+                      aria-label={`修改 ${friend.identityName} 的备注`}
+                      onClick={() => beginRemark(friend)}
+                      transition={{ duration: reducedMotion ? 0 : 0.15, ease: [0.22, 1, 0.36, 1] }}
+                      type="button"
+                    >
+                      <Pencil size={17} />
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+              </motion.article>
             ))}
           </div>
         ) : (

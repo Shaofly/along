@@ -9,7 +9,9 @@ import {
   circles,
   circleMemberRelations,
   draftMedia,
+  draftParticipants,
   drafts,
+  draftViewers,
   mediaAssets,
   postMedia,
   postParticipants,
@@ -120,18 +122,70 @@ export async function POST(request: Request) {
 
   if (draftId) {
     const [draft] = await db
-      .select({ id: drafts.id })
+      .select({
+        id: drafts.id,
+        body: drafts.body,
+        circleId: drafts.circleId,
+        visibility: drafts.visibility,
+        managementMode: drafts.managementMode,
+      })
       .from(drafts)
       .where(and(eq(drafts.id, draftId), eq(drafts.authorId, session.user.id)))
       .limit(1);
     if (!draft) return NextResponse.json({ error: "草稿不存在。" }, { status: 404 });
-    const linkedMedia = await db
-      .select({ id: draftMedia.mediaId })
-      .from(draftMedia)
-      .where(eq(draftMedia.draftId, draftId));
+    if (
+      draft.circleId !== circleId ||
+      draft.body !== parsed.data.body ||
+      draft.visibility !== (circleId ? "private" : parsed.data.visibility) ||
+      draft.managementMode !==
+        (circleId ? parsed.data.managementMode : "creator")
+    ) {
+      return NextResponse.json(
+        { error: "草稿内容或发布目标尚未同步完成。" },
+        { status: 409 },
+      );
+    }
+    const [linkedMedia, linkedViewers, linkedParticipants] = await Promise.all([
+      db
+        .select({ id: draftMedia.mediaId })
+        .from(draftMedia)
+        .where(eq(draftMedia.draftId, draftId)),
+      db
+        .select({ id: draftViewers.userId })
+        .from(draftViewers)
+        .where(eq(draftViewers.draftId, draftId)),
+      db
+        .select({ id: draftParticipants.userId })
+        .from(draftParticipants)
+        .where(eq(draftParticipants.draftId, draftId)),
+    ]);
     const linkedIds = linkedMedia.map((media) => media.id);
     if (linkedIds.length !== mediaIds.length || linkedIds.some((id) => !mediaIds.includes(id))) {
       return NextResponse.json({ error: "草稿照片尚未同步完成。" }, { status: 409 });
+    }
+    const linkedViewerIds = linkedViewers.map((viewer) => viewer.id);
+    if (
+      !circleId &&
+      (linkedViewerIds.length !== viewerIds.length ||
+        linkedViewerIds.some((id) => !viewerIds.includes(id)))
+    ) {
+      return NextResponse.json(
+        { error: "草稿的可见范围尚未同步完成。" },
+        { status: 409 },
+      );
+    }
+    const linkedParticipantIds = linkedParticipants.map(
+      (participant) => participant.id,
+    );
+    if (
+      circleId &&
+      (linkedParticipantIds.length !== participantIds.length ||
+        linkedParticipantIds.some((id) => !participantIds.includes(id)))
+    ) {
+      return NextResponse.json(
+        { error: "草稿的参与者尚未同步完成。" },
+        { status: 409 },
+      );
     }
   }
 

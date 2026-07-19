@@ -6,7 +6,6 @@ import { FeedSkeleton, SummaryListSkeleton } from "@/app/components/SkeletonReve
 import { auth } from "@/lib/auth";
 import { getCircleDashboard } from "@/lib/circles";
 import { getVisiblePosts } from "@/lib/content";
-import { getLatestDraft } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
@@ -24,12 +23,11 @@ export default async function HomePage() {
     redirect("/");
   }
 
-  const [currentUser, ownPosts, friendRows, circleDashboard, initialDraft] = await Promise.all([
+  const [currentUser, ownPosts, friendRows, circleDashboard] = await Promise.all([
     getShellUser(session.user.id),
     getVisiblePosts(session.user.id, { profileId: session.user.id, limit: 20 }),
     getFriends(session.user.id),
     getCircleDashboard(session.user.id),
-    getLatestDraft(session.user.id),
   ]);
   if (!currentUser) redirect("/");
 
@@ -51,7 +49,6 @@ export default async function HomePage() {
         image: friend.image,
         bio: friend.bio,
       }))}
-      initialDraft={initialDraft}
       key={boardMedia.map((media) => media.id).join(":") || "empty-board"}
       circleList={(
         <Suspense fallback={<SummaryListSkeleton rows={2} />}>

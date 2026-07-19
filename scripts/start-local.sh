@@ -12,4 +12,6 @@ export WATCHPACK_POLLING=500
 cd "$PROJECT_DIR"
 brew services start postgresql@17 >/dev/null 2>&1 || true
 (sleep 2 && open "http://localhost:3000") &
-exec "$PROJECT_DIR/node_modules/.bin/next" dev --port 3000
+# Prefer Webpack for local UI work: its refresh path is slower than Turbopack,
+# but avoids serving newly updated components alongside stale global CSS.
+exec "$PROJECT_DIR/node_modules/.bin/next" dev --webpack --port 3000

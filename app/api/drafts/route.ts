@@ -14,7 +14,10 @@ import {
   postMedia,
 } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { getActiveCircleMembership } from "@/lib/circles";
+import {
+  assertActiveCircleMutation,
+  getActiveCircleMembership,
+} from "@/lib/circles";
 import { deleteDraftWithAssets, getLatestDraft } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
 import { deleteMediaAsset } from "@/lib/media/service";
@@ -118,8 +121,16 @@ export async function PUT(request: Request) {
     : [];
   const removedMedia = previousMedia.filter((media) => !mediaIds.includes(media.id));
 
-  await db.transaction(async (transaction) => {
-    if (parsed.data.id) {
+  try {
+    await db.transaction(async (transaction) => {
+      if (circleId) {
+        await assertActiveCircleMutation(
+          transaction,
+          session.user.id,
+          circleId,
+        );
+      }
+      if (parsed.data.id) {
       await transaction
         .update(drafts)
         .set({
@@ -132,25 +143,34 @@ export async function PUT(request: Request) {
         .where(eq(drafts.id, id));
       await transaction.delete(draftViewers).where(eq(draftViewers.draftId, id));
       await transaction.delete(draftMedia).where(eq(draftMedia.draftId, id));
-    } else {
-      await transaction.insert(drafts).values({
+      } else {
+        await transaction.insert(drafts).values({
         id,
         authorId: session.user.id,
         body: parsed.data.body,
         circleId,
         visibility: circleId ? "private" : parsed.data.visibility,
         managementMode: circleId ? parsed.data.managementMode : "creator",
-      });
-    }
-    if (!circleId && parsed.data.visibility === "selected" && viewerIds.length) {
-      await transaction.insert(draftViewers).values(viewerIds.map((userId) => ({ draftId: id, userId })));
-    }
-    if (mediaIds.length) {
-      await transaction.insert(draftMedia).values(
+        });
+      }
+      if (!circleId && parsed.data.visibility === "selected" && viewerIds.length) {
+        await transaction.insert(draftViewers).values(viewerIds.map((userId) => ({ draftId: id, userId })));
+      }
+      if (mediaIds.length) {
+        await transaction.insert(draftMedia).values(
         mediaIds.map((mediaId, position) => ({ draftId: id, mediaId, position })),
-      );
-    }
-  });
+        );
+      }
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "圈子状态已经发生变化。",
+      },
+      { status: 409 },
+    );
+  }
   await Promise.all(
     removedMedia.map((media) => deleteMediaAsset(media.id)),
   );

@@ -24,17 +24,27 @@ async function findAsset(id: string) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return new Response(null, { status: 401 });
+  if (!session) {
+    return new Response(null, {
+      status: 401,
+      headers: { "cache-control": "private, no-store" },
+    });
+  }
 
   const { id } = await context.params;
   if (!(await canAccessMedia(session.user.id, id))) {
-    return new Response(null, { status: 404 });
+    return new Response(null, {
+      status: 404,
+      headers: { "cache-control": "private, no-store" },
+    });
   }
-  return mediaResponse(id, "preview");
+  return mediaResponse(id, "preview", {
+    ifNoneMatch: request.headers.get("if-none-match"),
+  });
 }
 
 export async function DELETE(

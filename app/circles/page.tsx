@@ -26,6 +26,7 @@ export default async function CirclesPage() {
         <CirclesClient
           actions={dashboard.actions}
           circles={dashboard.circles}
+          creationRequests={dashboard.creationRequests}
           friends={friends.map((friend) => ({
             id: friend.id,
             name: friend.name,

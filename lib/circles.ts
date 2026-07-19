@@ -3,14 +3,15 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import {
   and,
+  asc,
   desc,
   eq,
   gte,
   inArray,
   isNotNull,
   isNull,
-  lt,
   lte,
+  notExists,
   or,
   sql,
 } from "drizzle-orm";
@@ -18,6 +19,8 @@ import {
 import { db } from "@/db";
 import {
   circleEvents,
+  circleCreationInvitees,
+  circleCreationRequests,
   circleExitSnapshotMedia,
   circleExitSnapshotPosts,
   circleExitSnapshots,
@@ -26,6 +29,9 @@ import {
   circleMembershipPeriods,
   circleProposalApprovals,
   circles,
+  draftMedia,
+  drafts,
+  mediaAssets,
   postMedia,
   posts,
   user,
@@ -34,22 +40,41 @@ import { deleteMediaAsset } from "@/lib/media/service";
 
 const activeProposalStatuses = ["pending_approval", "awaiting_candidate"] as const;
 const maximumCircleMembers = 10;
+const hourInMilliseconds = 60 * 60 * 1000;
+const dayInMilliseconds = 24 * hourInMilliseconds;
+const failedCreationResultRetention = 7 * dayInMilliseconds;
 
 function threeDaysFromNow() {
-  return new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  return new Date(Date.now() + 3 * dayInMilliseconds);
 }
 
-async function getActiveCircleMemberIds(circleId: string) {
-  const rows = await db
-    .select({ userId: circleMemberRelations.userId })
-    .from(circleMemberRelations)
-    .where(
-      and(
-        eq(circleMemberRelations.circleId, circleId),
-        isNotNull(circleMemberRelations.activePeriodId),
-      ),
-    );
-  return rows.map((row) => row.userId);
+function oneDayFrom(date: Date) {
+  return new Date(date.getTime() + dayInMilliseconds);
+}
+
+function getCircleDeleteAt(createdAt: Date, frozenAt: Date) {
+  const age = frozenAt.getTime() - createdAt.getTime();
+  const grace =
+    age < 3 * dayInMilliseconds
+      ? hourInMilliseconds
+      : age < 7 * dayInMilliseconds
+        ? dayInMilliseconds
+        : age < 30 * dayInMilliseconds
+          ? 3 * dayInMilliseconds
+          : age < 90 * dayInMilliseconds
+            ? 7 * dayInMilliseconds
+            : age < 180 * dayInMilliseconds
+              ? 14 * dayInMilliseconds
+              : 30 * dayInMilliseconds;
+  return new Date(frozenAt.getTime() + grace);
+}
+
+function firstAvailableSlot(usedSlots: number[]) {
+  const used = new Set(usedSlots);
+  for (let slot = 1; slot <= maximumCircleMembers; slot += 1) {
+    if (!used.has(slot)) return slot;
+  }
+  return null;
 }
 
 async function getExitArchiveMediaIds(snapshotId: string) {
@@ -64,16 +89,194 @@ async function getExitArchiveMediaIds(snapshotId: string) {
   return [...new Set(rows.map((row) => row.mediaId))];
 }
 
-export async function expireCircleProposals() {
+type CircleTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function settleCircleCreationRequest(
+  transaction: CircleTransaction,
+  requestId: string,
+  now: Date,
+) {
+  const [request] = await transaction
+    .select()
+    .from(circleCreationRequests)
+    .where(eq(circleCreationRequests.id, requestId))
+    .limit(1)
+    .for("update");
+  if (!request || request.status !== "pending") {
+    return request?.formedCircleId ?? null;
+  }
+
+  if (now >= request.expiresAt) {
+    await transaction
+      .update(circleCreationInvitees)
+      .set({ status: "expired", resolvedAt: now })
+      .where(
+        and(
+          eq(circleCreationInvitees.requestId, requestId),
+          eq(circleCreationInvitees.status, "pending"),
+        ),
+      );
+  }
+
+  const invitees = await transaction
+    .select({
+      candidateId: circleCreationInvitees.candidateId,
+      status: circleCreationInvitees.status,
+    })
+    .from(circleCreationInvitees)
+    .where(eq(circleCreationInvitees.requestId, requestId))
+    .orderBy(asc(circleCreationInvitees.candidateId));
+  if (invitees.some((invitee) => invitee.status === "pending")) return null;
+
+  const acceptedUserIds = invitees
+    .filter((invitee) => invitee.status === "accepted")
+    .map((invitee) => invitee.candidateId);
+  if (acceptedUserIds.length === 0) {
+    await transaction
+      .update(circleCreationRequests)
+      .set({
+        status: "failed",
+        resolvedAt: now,
+        purgeAt: new Date(now.getTime() + failedCreationResultRetention),
+      })
+      .where(
+        and(
+          eq(circleCreationRequests.id, requestId),
+          eq(circleCreationRequests.status, "pending"),
+        ),
+      );
+    return null;
+  }
+
+  const circleId = randomUUID();
+  const memberIds = [request.creatorId, ...acceptedUserIds];
+  const memberships = memberIds.map((userId, index) => ({
+    userId,
+    relationId: randomUUID(),
+    periodId: randomUUID(),
+    slot: index + 1,
+  }));
+  await transaction.insert(circles).values({
+    id: circleId,
+    name: request.name,
+    description: request.description,
+    status: "active",
+    createdById: request.creatorId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await transaction.insert(circleMemberRelations).values(
+    memberships.map((membership) => ({
+      id: membership.relationId,
+      circleId,
+      userId: membership.userId,
+      historyVisibleFrom: now,
+      createdAt: now,
+    })),
+  );
+  await transaction.insert(circleMembershipPeriods).values(
+    memberships.map((membership) => ({
+      id: membership.periodId,
+      relationId: membership.relationId,
+      joinedAt: now,
+      lastViewedAt: now,
+    })),
+  );
+  for (const membership of memberships) {
+    await transaction
+      .update(circleMemberRelations)
+      .set({
+        activePeriodId: membership.periodId,
+        activeSlot: membership.slot,
+      })
+      .where(eq(circleMemberRelations.id, membership.relationId));
+  }
+  await transaction.insert(circleEvents).values({
+    id: randomUUID(),
+    circleId,
+    actorId: request.creatorId,
+    type: "circle_created",
+    message: `${memberIds.length} 位朋友共同建立了这个小圈子。`,
+    createdAt: now,
+  });
+  await transaction
+    .update(circleCreationRequests)
+    .set({
+      status: "formed",
+      formedCircleId: circleId,
+      resolvedAt: now,
+    })
+    .where(
+      and(
+        eq(circleCreationRequests.id, requestId),
+        eq(circleCreationRequests.status, "pending"),
+      ),
+    );
+  return circleId;
+}
+
+export async function settleExpiredCircleCreationRequests(now = new Date()) {
+  const expired = await db
+    .select({ id: circleCreationRequests.id })
+    .from(circleCreationRequests)
+    .where(
+      and(
+        eq(circleCreationRequests.status, "pending"),
+        lte(circleCreationRequests.expiresAt, now),
+      ),
+    )
+    .limit(100);
+  for (const request of expired) {
+    await db.transaction((transaction) =>
+      settleCircleCreationRequest(transaction, request.id, now),
+    );
+  }
   await db
-    .update(circleJoinProposals)
-    .set({ status: "expired", resolvedAt: new Date() })
+    .delete(circleCreationRequests)
+    .where(
+      and(
+        eq(circleCreationRequests.status, "failed"),
+        lte(circleCreationRequests.purgeAt, now),
+      ),
+    );
+  return expired.length;
+}
+
+export async function expireCircleProposals(now = new Date()) {
+  const expired = await db
+    .select({
+      id: circleJoinProposals.id,
+      circleId: circleJoinProposals.circleId,
+    })
+    .from(circleJoinProposals)
     .where(
       and(
         inArray(circleJoinProposals.status, [...activeProposalStatuses]),
-        lt(circleJoinProposals.expiresAt, new Date()),
+        lte(circleJoinProposals.expiresAt, now),
       ),
-    );
+    )
+    .limit(100);
+  for (const proposal of expired) {
+    await db.transaction(async (transaction) => {
+      await transaction
+        .select({ id: circles.id })
+        .from(circles)
+        .where(eq(circles.id, proposal.circleId))
+        .limit(1)
+        .for("update");
+      await transaction
+        .update(circleJoinProposals)
+        .set({ status: "expired", resolvedAt: now })
+        .where(
+          and(
+            eq(circleJoinProposals.id, proposal.id),
+            inArray(circleJoinProposals.status, [...activeProposalStatuses]),
+            lte(circleJoinProposals.expiresAt, now),
+          ),
+        );
+    });
+  }
+  return expired.length;
 }
 
 export async function getCircleRelation(userId: string, circleId: string) {
@@ -109,6 +312,13 @@ export async function getActiveCircleMembership(userId: string, circleId: string
       circleMembershipPeriods,
       eq(circleMemberRelations.activePeriodId, circleMembershipPeriods.id),
     )
+    .innerJoin(
+      circles,
+      and(
+        eq(circleMemberRelations.circleId, circles.id),
+        eq(circles.status, "active"),
+      ),
+    )
     .where(
       and(
         eq(circleMemberRelations.userId, userId),
@@ -121,8 +331,37 @@ export async function getActiveCircleMembership(userId: string, circleId: string
   return membership ?? null;
 }
 
+export async function assertActiveCircleMutation(
+  transaction: CircleTransaction,
+  userId: string,
+  circleId: string,
+) {
+  const [circle] = await transaction
+    .select({ id: circles.id })
+    .from(circles)
+    .where(and(eq(circles.id, circleId), eq(circles.status, "active")))
+    .limit(1)
+    .for("update");
+  if (!circle) throw new Error("这个圈子目前不能修改。");
+  const [membership] = await transaction
+    .select({ id: circleMemberRelations.id })
+    .from(circleMemberRelations)
+    .where(
+      and(
+        eq(circleMemberRelations.circleId, circleId),
+        eq(circleMemberRelations.userId, userId),
+        isNotNull(circleMemberRelations.activePeriodId),
+      ),
+    )
+    .limit(1);
+  if (!membership) throw new Error("只有当前活跃成员可以修改这个圈子。");
+}
+
 export async function getCircleDashboard(userId: string) {
-  await expireCircleProposals();
+  await Promise.all([
+    settleExpiredCircleCreationRequests(),
+    expireCircleProposals(),
+  ]);
   const relationRows = await db
     .select({
       relationId: circleMemberRelations.id,
@@ -131,6 +370,9 @@ export async function getCircleDashboard(userId: string) {
       liveDescription: circles.description,
       liveStatus: circles.status,
       liveUpdatedAt: circles.updatedAt,
+      frozenAt: circles.frozenAt,
+      deleteAt: circles.deleteAt,
+      recoverableByUserId: circles.recoverableByUserId,
       activePeriodId: circleMemberRelations.activePeriodId,
       joinedAt: circleMembershipPeriods.joinedAt,
       lastViewedAt: circleMembershipPeriods.lastViewedAt,
@@ -155,10 +397,27 @@ export async function getCircleDashboard(userId: string) {
         or(
           isNotNull(circleMemberRelations.activePeriodId),
           isNotNull(circleExitSnapshots.id),
+          and(
+            eq(circles.status, "frozen"),
+            eq(circles.recoverableByUserId, userId),
+          ),
         ),
       ),
     )
-    .orderBy(desc(circles.updatedAt));
+    .orderBy(
+      desc(
+        sql`case
+          when ${circleMemberRelations.activePeriodId} is not null
+            then ${circles.updatedAt}
+          else coalesce(
+            ${circleExitSnapshots.capturedAt},
+            ${circles.frozenAt},
+            ${circles.updatedAt}
+          )
+        end`,
+      ),
+      asc(circles.id),
+    );
 
   const circleIds = [...new Set(relationRows.map((row) => row.circleId))];
   const activeRows = relationRows.filter((row) => row.activePeriodId !== null);
@@ -281,11 +540,17 @@ export async function getCircleDashboard(userId: string) {
       updatedAt: (
         isActive
           ? row.liveUpdatedAt
-          : (row.snapshotCapturedAt ?? row.liveUpdatedAt)
+          : (row.snapshotCapturedAt ?? row.frozenAt ?? row.liveUpdatedAt)
       ).toISOString(),
       isActive,
       isArchived: !isActive,
       capturedAt: row.snapshotCapturedAt?.toISOString() ?? null,
+      frozenAt: row.frozenAt?.toISOString() ?? null,
+      deleteAt: row.deleteAt?.toISOString() ?? null,
+      canRestore:
+        row.liveStatus === "frozen" &&
+        row.recoverableByUserId === userId &&
+        Boolean(row.deleteAt && row.deleteAt > new Date()),
       members: [...uniqueMembers.values()],
       unread: {
         posts: unreadPosts,
@@ -297,6 +562,69 @@ export async function getCircleDashboard(userId: string) {
     };
   });
 
+  const creationRequestRows = await db
+    .select({
+      id: circleCreationRequests.id,
+      name: circleCreationRequests.name,
+      description: circleCreationRequests.description,
+      status: circleCreationRequests.status,
+      expiresAt: circleCreationRequests.expiresAt,
+      resolvedAt: circleCreationRequests.resolvedAt,
+    })
+    .from(circleCreationRequests)
+    .where(
+      and(
+        eq(circleCreationRequests.creatorId, userId),
+        inArray(circleCreationRequests.status, ["pending", "failed"]),
+      ),
+    )
+    .orderBy(desc(circleCreationRequests.createdAt));
+  const creationRequestIds = creationRequestRows.map((row) => row.id);
+  const creationInviteRows = creationRequestIds.length
+    ? await db
+        .select({
+          requestId: circleCreationInvitees.requestId,
+          candidateId: user.id,
+          candidateName: user.name,
+          status: circleCreationInvitees.status,
+        })
+        .from(circleCreationInvitees)
+        .innerJoin(user, eq(circleCreationInvitees.candidateId, user.id))
+        .where(inArray(circleCreationInvitees.requestId, creationRequestIds))
+        .orderBy(user.name)
+    : [];
+  const creationRequests = creationRequestRows.map((request) => ({
+    ...request,
+    status: request.status as "pending" | "failed",
+    expiresAt: request.expiresAt.toISOString(),
+    resolvedAt: request.resolvedAt?.toISOString() ?? null,
+    invitees: creationInviteRows
+      .filter((invitee) => invitee.requestId === request.id)
+      .map((invitee) => ({
+        id: invitee.candidateId,
+        name: invitee.candidateName,
+        status: invitee.status,
+      })),
+  }));
+
+  const creationActionRows = await db
+    .select({
+      requestId: circleCreationRequests.id,
+      circleName: circleCreationRequests.name,
+      expiresAt: circleCreationRequests.expiresAt,
+    })
+    .from(circleCreationInvitees)
+    .innerJoin(
+      circleCreationRequests,
+      eq(circleCreationInvitees.requestId, circleCreationRequests.id),
+    )
+    .where(
+      and(
+        eq(circleCreationInvitees.candidateId, userId),
+        eq(circleCreationInvitees.status, "pending"),
+        eq(circleCreationRequests.status, "pending"),
+      ),
+    );
   const candidateRows = await db
     .select({
       proposalId: circleJoinProposals.id,
@@ -313,6 +641,7 @@ export async function getCircleDashboard(userId: string) {
       and(
         eq(circleJoinProposals.candidateId, userId),
         eq(circleJoinProposals.status, "awaiting_candidate"),
+        eq(circles.status, "active"),
       ),
     );
   const approvalRows = await db
@@ -331,11 +660,20 @@ export async function getCircleDashboard(userId: string) {
       eq(circleProposalApprovals.proposalId, circleJoinProposals.id),
     )
     .innerJoin(circles, eq(circleJoinProposals.circleId, circles.id))
+    .innerJoin(
+      circleMemberRelations,
+      and(
+        eq(circleMemberRelations.circleId, circleJoinProposals.circleId),
+        eq(circleMemberRelations.userId, circleProposalApprovals.userId),
+        isNotNull(circleMemberRelations.activePeriodId),
+      ),
+    )
     .where(
       and(
         eq(circleProposalApprovals.userId, userId),
         eq(circleProposalApprovals.decision, "pending"),
         eq(circleJoinProposals.status, "pending_approval"),
+        eq(circles.status, "active"),
       ),
     );
   const candidateIds = [...new Set(approvalRows.map((row) => row.candidateId))];
@@ -351,15 +689,36 @@ export async function getCircleDashboard(userId: string) {
 
   return {
     circles: summaries,
+    creationRequests,
     actions: [
+      ...creationActionRows.map((row) => ({
+        actionId: row.requestId,
+        actionType: "creation" as const,
+        circleName: row.circleName,
+        candidateName: "你",
+        kind: "creation" as const,
+        allowHistory: true,
+        expiresAt: row.expiresAt.toISOString(),
+        role: "candidate" as const,
+      })),
       ...candidateRows.map((row) => ({
-        ...row,
+        actionId: row.proposalId,
+        actionType: "proposal" as const,
+        circleId: row.circleId,
+        circleName: row.circleName,
+        kind: row.kind,
+        allowHistory: row.allowHistory,
         candidateName: "你",
         expiresAt: row.expiresAt.toISOString(),
         role: "candidate" as const,
       })),
       ...approvalRows.map((row) => ({
-        ...row,
+        actionId: row.proposalId,
+        actionType: "proposal" as const,
+        circleId: row.circleId,
+        circleName: row.circleName,
+        kind: row.kind,
+        allowHistory: row.allowHistory,
         candidateName: candidateNames.get(row.candidateId) ?? "一位朋友",
         expiresAt: row.expiresAt.toISOString(),
         role: "approver" as const,
@@ -380,6 +739,9 @@ export async function getCircleDetail(userId: string, circleId: string) {
       liveStatus: circles.status,
       liveCreatedAt: circles.createdAt,
       liveUpdatedAt: circles.updatedAt,
+      frozenAt: circles.frozenAt,
+      deleteAt: circles.deleteAt,
+      recoverableByUserId: circles.recoverableByUserId,
       snapshotId: circleExitSnapshots.id,
       snapshotName: circleExitSnapshots.circleName,
       snapshotDescription: circleExitSnapshots.circleDescription,
@@ -401,7 +763,11 @@ export async function getCircleDetail(userId: string, circleId: string) {
   if (!viewer) return null;
 
   const isActive = viewer.activePeriodId !== null;
-  const isArchived = !isActive && viewer.snapshotId !== null;
+  const isArchived =
+    !isActive &&
+    (viewer.snapshotId !== null ||
+      (viewer.liveStatus === "frozen" &&
+        viewer.recoverableByUserId === userId));
   if (!isActive && !isArchived) return null;
   const capturedAt = viewer.snapshotCapturedAt;
   const memberRows = await db
@@ -426,18 +792,9 @@ export async function getCircleDetail(userId: string, circleId: string) {
     .where(eq(circleMemberRelations.circleId, circleId))
     .orderBy(circleMembershipPeriods.joinedAt);
 
-  const members = new Map<
+  const memberRowsByUser = new Map<
     string,
-    {
-      id: string;
-      name: string;
-      realName: string;
-      nickname: string | null;
-      circleNickname: string | null;
-      image: string | null;
-      isActive: boolean;
-      periods: Array<{ id: string; joinedAt: string; leftAt: string | null }>;
-    }
+    Array<(typeof memberRows)[number]>
   >();
   for (const row of memberRows) {
     const periodWasVisible = isActive
@@ -448,24 +805,38 @@ export async function getCircleDetail(userId: string, circleId: string) {
             (!row.leftAt || row.leftAt >= capturedAt),
         );
     if (!periodWasVisible) continue;
-    const member = members.get(row.id) ?? {
-      id: row.id,
-      name: row.circleNickname ?? row.nickname ?? row.name,
-      realName: row.realName,
-      nickname: row.nickname,
-      circleNickname: row.circleNickname,
-      image: row.image,
-      isActive: isArchived || row.activePeriodId === row.periodId,
-      periods: [],
-    };
-    member.isActive ||= isArchived || row.activePeriodId === row.periodId;
-    member.periods.push({
-      id: row.periodId,
-      joinedAt: row.joinedAt.toISOString(),
-      leftAt: row.leftAt?.toISOString() ?? null,
-    });
-    members.set(row.id, member);
+    const rows = memberRowsByUser.get(row.id) ?? [];
+    rows.push(row);
+    memberRowsByUser.set(row.id, rows);
   }
+  const members = [...memberRowsByUser.values()].map((rows) => {
+    const periods = rows.toSorted(
+      (left, right) =>
+        left.joinedAt.getTime() - right.joinedAt.getTime() ||
+        left.periodId.localeCompare(right.periodId),
+    );
+    const profile = periods[0]!;
+    const identityPeriod = isArchived
+      ? null
+      : (periods.find(
+          (period) => period.periodId === period.activePeriodId,
+        ) ?? null);
+    const circleNickname = identityPeriod?.circleNickname ?? null;
+    return {
+      id: profile.id,
+      name: circleNickname ?? profile.nickname ?? profile.name,
+      realName: profile.realName,
+      nickname: profile.nickname,
+      circleNickname,
+      image: profile.image,
+      isActive: isArchived || identityPeriod !== null,
+      periods: periods.map((period) => ({
+        id: period.periodId,
+        joinedAt: period.joinedAt.toISOString(),
+        leftAt: period.leftAt?.toISOString() ?? null,
+      })),
+    };
+  });
 
   const events = await db
     .select({
@@ -506,7 +877,13 @@ export async function getCircleDetail(userId: string, circleId: string) {
     isActive,
     isArchived,
     capturedAt: viewer.snapshotCapturedAt?.toISOString() ?? null,
-    members: [...members.values()],
+    frozenAt: viewer.frozenAt?.toISOString() ?? null,
+    deleteAt: viewer.deleteAt?.toISOString() ?? null,
+    canRestore:
+      viewer.liveStatus === "frozen" &&
+      viewer.recoverableByUserId === userId &&
+      Boolean(viewer.deleteAt && viewer.deleteAt > new Date()),
+    members,
     events: events.map((event) => ({
       ...event,
       createdAt: event.createdAt.toISOString(),
@@ -519,58 +896,96 @@ export async function createCircle(
   input: { name: string; description: string; invitedUserIds: string[] },
 ) {
   const now = new Date();
-  const circleId = randomUUID();
-  const relationId = randomUUID();
-  const periodId = randomUUID();
+  const requestId = randomUUID();
   await db.transaction(async (transaction) => {
-    await transaction.insert(circles).values({
-      id: circleId,
+    await transaction.insert(circleCreationRequests).values({
+      id: requestId,
+      creatorId,
       name: input.name,
       description: input.description,
-      createdById: creatorId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await transaction.insert(circleMemberRelations).values({
-      id: relationId,
-      circleId,
-      userId: creatorId,
-      historyVisibleFrom: now,
+      expiresAt: oneDayFrom(now),
       createdAt: now,
     });
-    await transaction.insert(circleMembershipPeriods).values({
-      id: periodId,
-      relationId,
-      joinedAt: now,
-      lastViewedAt: now,
-    });
-    await transaction
-      .update(circleMemberRelations)
-      .set({ activePeriodId: periodId })
-      .where(eq(circleMemberRelations.id, relationId));
-    await transaction.insert(circleEvents).values({
-      id: randomUUID(),
-      circleId,
-      actorId: creatorId,
-      type: "circle_created",
-      message: "创建了这个小圈子，正在等朋友们加入。",
-      createdAt: now,
-    });
-    await transaction.insert(circleJoinProposals).values(
+    await transaction.insert(circleCreationInvitees).values(
       input.invitedUserIds.map((candidateId) => ({
-        id: randomUUID(),
-        circleId,
+        requestId,
         candidateId,
-        proposerId: creatorId,
-        kind: "initial" as const,
-        allowHistory: true,
-        status: "awaiting_candidate" as const,
-        expiresAt: threeDaysFromNow(),
-        createdAt: now,
       })),
     );
   });
+  return requestId;
+}
+
+export async function respondToCircleCreationInvite(
+  userId: string,
+  requestId: string,
+  decision: "accept" | "decline",
+) {
+  let expired = false;
+  const circleId = await db.transaction(async (transaction) => {
+    const [request] = await transaction
+      .select()
+      .from(circleCreationRequests)
+      .where(eq(circleCreationRequests.id, requestId))
+      .limit(1)
+      .for("update");
+    if (!request || request.status !== "pending") {
+      throw new Error("这项创建邀请已经失效或处理完成。");
+    }
+    const now = new Date();
+    if (now >= request.expiresAt) {
+      expired = true;
+      return settleCircleCreationRequest(transaction, requestId, now);
+    }
+    const [invitee] = await transaction
+      .select({ candidateId: circleCreationInvitees.candidateId })
+      .from(circleCreationInvitees)
+      .where(
+        and(
+          eq(circleCreationInvitees.requestId, requestId),
+          eq(circleCreationInvitees.candidateId, userId),
+          eq(circleCreationInvitees.status, "pending"),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!invitee) {
+      throw new Error("你目前不需要处理这项创建邀请。");
+    }
+    await transaction
+      .update(circleCreationInvitees)
+      .set({
+        status: decision === "accept" ? "accepted" : "declined",
+        resolvedAt: now,
+      })
+      .where(
+        and(
+          eq(circleCreationInvitees.requestId, requestId),
+          eq(circleCreationInvitees.candidateId, userId),
+          eq(circleCreationInvitees.status, "pending"),
+        ),
+      );
+    return settleCircleCreationRequest(transaction, requestId, now);
+  });
+  if (expired) throw new Error("这项创建邀请已经超过 24 小时。");
   return circleId;
+}
+
+export async function acknowledgeCircleCreationResult(
+  userId: string,
+  requestId: string,
+) {
+  const deleted = await db
+    .delete(circleCreationRequests)
+    .where(
+      and(
+        eq(circleCreationRequests.id, requestId),
+        eq(circleCreationRequests.creatorId, userId),
+        eq(circleCreationRequests.status, "failed"),
+      ),
+    )
+    .returning({ id: circleCreationRequests.id });
+  if (!deleted.length) throw new Error("没有可确认的创建结果。");
 }
 
 export async function createCircleJoinProposal(
@@ -582,41 +997,67 @@ export async function createCircleJoinProposal(
     kind?: "add" | "rejoin";
   },
 ) {
-  const activeMemberIds = await getActiveCircleMemberIds(input.circleId);
-  if (!activeMemberIds.includes(proposerId)) {
-    throw new Error("只有活跃成员可以发起加入提案。");
-  }
-  if (activeMemberIds.includes(input.candidateId)) {
-    throw new Error("这位朋友已经在圈子里了。");
-  }
-  if (activeMemberIds.length >= maximumCircleMembers) {
-    throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
-  }
-  const existingRelation = await getCircleRelation(
-    input.candidateId,
-    input.circleId,
-  );
-  const proposalKind = existingRelation ? "rejoin" : (input.kind ?? "add");
-  const existingProposal = await db
-    .select({ id: circleJoinProposals.id })
-    .from(circleJoinProposals)
-    .where(
-      and(
-        eq(circleJoinProposals.circleId, input.circleId),
-        eq(circleJoinProposals.candidateId, input.candidateId),
-        inArray(circleJoinProposals.status, [...activeProposalStatuses]),
-      ),
-    )
-    .limit(1);
-  if (existingProposal.length) {
-    throw new Error("这位朋友已经有一项待处理提案。");
-  }
-
   const proposalId = randomUUID();
   const now = new Date();
-  const status =
-    activeMemberIds.length === 1 ? "awaiting_candidate" : "pending_approval";
   await db.transaction(async (transaction) => {
+    const [circle] = await transaction
+      .select({ status: circles.status })
+      .from(circles)
+      .where(eq(circles.id, input.circleId))
+      .limit(1)
+      .for("update");
+    if (!circle || circle.status !== "active") {
+      throw new Error("这个圈子目前不能发起加入提案。");
+    }
+
+    const activeMemberRows = await transaction
+      .select({ userId: circleMemberRelations.userId })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, input.circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      );
+    const activeMemberIds = activeMemberRows.map((row) => row.userId);
+    if (!activeMemberIds.includes(proposerId)) {
+      throw new Error("只有活跃成员可以发起加入提案。");
+    }
+    if (activeMemberIds.includes(input.candidateId)) {
+      throw new Error("这位朋友已经在圈子里了。");
+    }
+    if (activeMemberIds.length >= maximumCircleMembers) {
+      throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
+    }
+
+    const [existingRelation] = await transaction
+      .select({ id: circleMemberRelations.id })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.userId, input.candidateId),
+          eq(circleMemberRelations.circleId, input.circleId),
+        ),
+      )
+      .limit(1);
+    const proposalKind = existingRelation ? "rejoin" : (input.kind ?? "add");
+    const [existingProposal] = await transaction
+      .select({ id: circleJoinProposals.id })
+      .from(circleJoinProposals)
+      .where(
+        and(
+          eq(circleJoinProposals.circleId, input.circleId),
+          eq(circleJoinProposals.candidateId, input.candidateId),
+          inArray(circleJoinProposals.status, [...activeProposalStatuses]),
+        ),
+      )
+      .limit(1);
+    if (existingProposal) {
+      throw new Error("这位朋友已经有一项待处理提案。");
+    }
+
+    const status =
+      activeMemberIds.length === 1 ? "awaiting_candidate" : "pending_approval";
     await transaction.insert(circleJoinProposals).values({
       id: proposalId,
       circleId: input.circleId,
@@ -644,43 +1085,68 @@ export async function createCircleJoinProposal(
 }
 
 export async function requestCircleRejoin(userId: string, circleId: string) {
-  const [circle] = await db
-    .select({ status: circles.status })
-    .from(circles)
-    .where(eq(circles.id, circleId))
-    .limit(1);
-  const relation = await getCircleRelation(userId, circleId);
-  if (!circle || circle.status !== "active" || !relation) {
-    throw new Error("这个圈子目前不能申请重新加入。");
-  }
-  if (relation.activePeriodId) {
-    throw new Error("你已经是圈子的活跃成员。");
-  }
-  const existingProposal = await db
-    .select({ id: circleJoinProposals.id })
-    .from(circleJoinProposals)
-    .where(
-      and(
-        eq(circleJoinProposals.circleId, circleId),
-        eq(circleJoinProposals.candidateId, userId),
-        inArray(circleJoinProposals.status, [...activeProposalStatuses]),
-      ),
-    )
-    .limit(1);
-  if (existingProposal.length) {
-    throw new Error("你已经有一项待处理的重新加入申请。");
-  }
-
-  const activeMemberIds = await getActiveCircleMemberIds(circleId);
-  if (activeMemberIds.length === 0) {
-    throw new Error("圈子目前没有活跃成员处理申请。");
-  }
-  if (activeMemberIds.length >= maximumCircleMembers) {
-    throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
-  }
   const proposalId = randomUUID();
   const now = new Date();
   await db.transaction(async (transaction) => {
+    const [circle] = await transaction
+      .select({ status: circles.status })
+      .from(circles)
+      .where(eq(circles.id, circleId))
+      .limit(1)
+      .for("update");
+    const [relation] = await transaction
+      .select({
+        id: circleMemberRelations.id,
+        activePeriodId: circleMemberRelations.activePeriodId,
+      })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.userId, userId),
+          eq(circleMemberRelations.circleId, circleId),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!circle || circle.status !== "active" || !relation) {
+      throw new Error("这个圈子目前不能申请重新加入。");
+    }
+    if (relation.activePeriodId) {
+      throw new Error("你已经是圈子的活跃成员。");
+    }
+
+    const [existingProposal] = await transaction
+      .select({ id: circleJoinProposals.id })
+      .from(circleJoinProposals)
+      .where(
+        and(
+          eq(circleJoinProposals.circleId, circleId),
+          eq(circleJoinProposals.candidateId, userId),
+          inArray(circleJoinProposals.status, [...activeProposalStatuses]),
+        ),
+      )
+      .limit(1);
+    if (existingProposal) {
+      throw new Error("你已经有一项待处理的重新加入申请。");
+    }
+
+    const activeMemberRows = await transaction
+      .select({ userId: circleMemberRelations.userId })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      );
+    const activeMemberIds = activeMemberRows.map((row) => row.userId);
+    if (activeMemberIds.length === 0) {
+      throw new Error("圈子目前没有活跃成员处理申请。");
+    }
+    if (activeMemberIds.length >= maximumCircleMembers) {
+      throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
+    }
+
     await transaction.insert(circleJoinProposals).values({
       id: proposalId,
       circleId,
@@ -722,90 +1188,142 @@ export async function respondToCircleProposal(
     throw new Error("这项邀请已经失效或处理完成。");
   }
 
-  if (
-    proposal.candidateId === userId &&
-    proposal.status === "awaiting_candidate"
-  ) {
-    if (decision === "decline") {
-      await db
-        .update(circleJoinProposals)
-        .set({ status: "declined", resolvedAt: new Date() })
-        .where(eq(circleJoinProposals.id, proposalId));
-      return;
+  if (proposal.candidateId === userId) {
+    if (proposal.status !== "awaiting_candidate") {
+      throw new Error("你目前还不能确认加入这项提案。");
     }
 
-    const activeMemberIds = await getActiveCircleMemberIds(proposal.circleId);
-    if (activeMemberIds.length >= maximumCircleMembers) {
-      throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
-    }
-    if (proposal.kind !== "initial") {
-      const approvals = await db
+    let archivedMediaIds: string[] = [];
+    let expired = false;
+    await db.transaction(async (transaction) => {
+      const [circle] = await transaction
         .select({
-          userId: circleProposalApprovals.userId,
-          decision: circleProposalApprovals.decision,
+          id: circles.id,
+          status: circles.status,
+          createdAt: circles.createdAt,
         })
-        .from(circleProposalApprovals)
-        .where(eq(circleProposalApprovals.proposalId, proposalId));
-      const approvedIds = new Set(
-        approvals
-          .filter((approval) => approval.decision === "approved")
-          .map((approval) => approval.userId),
-      );
-      const missingIds = activeMemberIds.filter(
-        (memberId) => !approvedIds.has(memberId),
-      );
-      if (missingIds.length > 0) {
-        await db.transaction(async (transaction) => {
-          await transaction
-            .insert(circleProposalApprovals)
-            .values(
-              missingIds.map((memberId) => ({
-                proposalId,
-                userId: memberId,
-              })),
-            )
-            .onConflictDoNothing();
-          await transaction
-            .update(circleJoinProposals)
-            .set({ status: "pending_approval" })
-            .where(eq(circleJoinProposals.id, proposalId));
-        });
-        throw new Error("圈子成员发生了变化，需要补齐新的成员确认。");
+        .from(circles)
+        .where(eq(circles.id, proposal.circleId))
+        .limit(1)
+        .for("update");
+      if (!circle || circle.status !== "active") {
+        throw new Error("这个圈子目前不能接受新成员。");
       }
-    }
 
-    const [circle] = await db
-      .select({ createdAt: circles.createdAt })
-      .from(circles)
-      .where(eq(circles.id, proposal.circleId))
-      .limit(1);
-    if (!circle) throw new Error("这个圈子不存在。");
-    const existingRelation = await getCircleRelation(userId, proposal.circleId);
-    if (existingRelation?.activePeriodId) {
-      throw new Error("你已经是圈子的活跃成员。");
-    }
-    const now = new Date();
-    const relationId = existingRelation?.id ?? randomUUID();
-    const periodId = randomUUID();
-    const archivedMediaIds = existingRelation
-      ? await db
-          .select({ snapshotId: circleExitSnapshots.id })
+      const [lockedProposal] = await transaction
+        .select()
+        .from(circleJoinProposals)
+        .where(eq(circleJoinProposals.id, proposalId))
+        .limit(1)
+        .for("update");
+      if (
+        !lockedProposal ||
+        lockedProposal.candidateId !== userId ||
+        lockedProposal.status !== "awaiting_candidate"
+      ) {
+        throw new Error("这项邀请已经失效或处理完成。");
+      }
+
+      const now = new Date();
+      if (now >= lockedProposal.expiresAt) {
+        await transaction
+          .update(circleJoinProposals)
+          .set({ status: "expired", resolvedAt: now })
+          .where(
+            and(
+              eq(circleJoinProposals.id, proposalId),
+              eq(circleJoinProposals.status, "awaiting_candidate"),
+            ),
+          );
+        expired = true;
+        return;
+      }
+      if (decision === "decline") {
+        await transaction
+          .update(circleJoinProposals)
+          .set({ status: "declined", resolvedAt: now })
+          .where(
+            and(
+              eq(circleJoinProposals.id, proposalId),
+              eq(circleJoinProposals.status, "awaiting_candidate"),
+            ),
+          );
+        return;
+      }
+
+      const activeMemberRows = await transaction
+        .select({
+          userId: circleMemberRelations.userId,
+          activeSlot: circleMemberRelations.activeSlot,
+        })
+        .from(circleMemberRelations)
+        .where(
+          and(
+            eq(circleMemberRelations.circleId, lockedProposal.circleId),
+            isNotNull(circleMemberRelations.activePeriodId),
+          ),
+        );
+      if (activeMemberRows.length >= maximumCircleMembers) {
+        throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
+      }
+      const activeSlot = firstAvailableSlot(
+        activeMemberRows
+          .map((member) => member.activeSlot)
+          .filter((slot): slot is number => slot !== null),
+      );
+      if (!activeSlot) {
+        throw new Error(`每个圈子最多 ${maximumCircleMembers} 位活跃成员。`);
+      }
+
+      const [existingRelation] = await transaction
+        .select()
+        .from(circleMemberRelations)
+        .where(
+          and(
+            eq(circleMemberRelations.userId, userId),
+            eq(circleMemberRelations.circleId, lockedProposal.circleId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (existingRelation?.activePeriodId) {
+        throw new Error("你已经是圈子的活跃成员。");
+      }
+
+      const relationId = existingRelation?.id ?? randomUUID();
+      const periodId = randomUUID();
+      if (existingRelation) {
+        const [snapshot] = await transaction
+          .select({ id: circleExitSnapshots.id })
           .from(circleExitSnapshots)
           .where(eq(circleExitSnapshots.relationId, relationId))
-          .limit(1)
-          .then((rows) =>
-            rows[0]?.snapshotId
-              ? getExitArchiveMediaIds(rows[0].snapshotId)
-              : [],
-          )
-      : [];
-    await db.transaction(async (transaction) => {
+          .limit(1);
+        if (snapshot) {
+          const archivedMediaRows = await transaction
+            .select({ mediaId: circleExitSnapshotMedia.mediaId })
+            .from(circleExitSnapshotMedia)
+            .innerJoin(
+              circleExitSnapshotPosts,
+              eq(
+                circleExitSnapshotMedia.snapshotPostId,
+                circleExitSnapshotPosts.id,
+              ),
+            )
+            .where(eq(circleExitSnapshotPosts.exitSnapshotId, snapshot.id));
+          archivedMediaIds = [
+            ...new Set(archivedMediaRows.map((row) => row.mediaId)),
+          ];
+        }
+      }
+
       if (!existingRelation) {
         await transaction.insert(circleMemberRelations).values({
           id: relationId,
-          circleId: proposal.circleId,
+          circleId: lockedProposal.circleId,
           userId,
-          historyVisibleFrom: proposal.allowHistory ? circle.createdAt : now,
+          historyVisibleFrom: lockedProposal.allowHistory
+            ? circle.createdAt
+            : now,
           createdAt: now,
         });
       }
@@ -817,7 +1335,7 @@ export async function respondToCircleProposal(
       });
       await transaction
         .update(circleMemberRelations)
-        .set({ activePeriodId: periodId })
+        .set({ activePeriodId: periodId, activeSlot })
         .where(eq(circleMemberRelations.id, relationId));
       await transaction
         .delete(circleExitSnapshots)
@@ -825,14 +1343,19 @@ export async function respondToCircleProposal(
       await transaction
         .update(circleJoinProposals)
         .set({ status: "accepted", resolvedAt: now })
-        .where(eq(circleJoinProposals.id, proposalId));
+        .where(
+          and(
+            eq(circleJoinProposals.id, proposalId),
+            eq(circleJoinProposals.status, "awaiting_candidate"),
+          ),
+        );
       await transaction
         .update(circles)
-        .set({ status: "active", updatedAt: now })
-        .where(eq(circles.id, proposal.circleId));
+        .set({ updatedAt: now })
+        .where(eq(circles.id, lockedProposal.circleId));
       await transaction.insert(circleEvents).values({
         id: randomUUID(),
-        circleId: proposal.circleId,
+        circleId: lockedProposal.circleId,
         actorId: userId,
         type: existingRelation ? "member_rejoined" : "member_joined",
         message: existingRelation
@@ -841,29 +1364,85 @@ export async function respondToCircleProposal(
         createdAt: now,
       });
     });
+    if (expired) throw new Error("这项邀请已经过期。");
     await Promise.all(
       archivedMediaIds.map((mediaId) => deleteMediaAsset(mediaId)),
     );
     return;
   }
 
-  const [approval] = await db
-    .select()
-    .from(circleProposalApprovals)
-    .where(
-      and(
-        eq(circleProposalApprovals.proposalId, proposalId),
-        eq(circleProposalApprovals.userId, userId),
-        eq(circleProposalApprovals.decision, "pending"),
-      ),
-    )
-    .limit(1);
-  if (!approval || proposal.status !== "pending_approval") {
-    throw new Error("你目前不需要处理这项提案。");
-  }
-
-  const now = new Date();
+  let expired = false;
   await db.transaction(async (transaction) => {
+    const [circle] = await transaction
+      .select({ id: circles.id, status: circles.status })
+      .from(circles)
+      .where(eq(circles.id, proposal.circleId))
+      .limit(1)
+      .for("update");
+    if (!circle || circle.status !== "active") {
+      throw new Error("这个圈子目前不能处理加入提案。");
+    }
+
+    const [activeApprover] = await transaction
+      .select({ id: circleMemberRelations.id })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, proposal.circleId),
+          eq(circleMemberRelations.userId, userId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!activeApprover) {
+      throw new Error("只有当前活跃成员可以处理这项提案。");
+    }
+
+    const [pendingProposal] = await transaction
+      .select({
+        id: circleJoinProposals.id,
+        expiresAt: circleJoinProposals.expiresAt,
+      })
+      .from(circleJoinProposals)
+      .where(
+        and(
+          eq(circleJoinProposals.id, proposalId),
+          eq(circleJoinProposals.status, "pending_approval"),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    const [approval] = await transaction
+      .select({ userId: circleProposalApprovals.userId })
+      .from(circleProposalApprovals)
+      .where(
+        and(
+          eq(circleProposalApprovals.proposalId, proposalId),
+          eq(circleProposalApprovals.userId, userId),
+          eq(circleProposalApprovals.decision, "pending"),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!pendingProposal || !approval) {
+      throw new Error("你目前不需要处理这项提案。");
+    }
+
+    const now = new Date();
+    if (now >= pendingProposal.expiresAt) {
+      await transaction
+        .update(circleJoinProposals)
+        .set({ status: "expired", resolvedAt: now })
+        .where(
+          and(
+            eq(circleJoinProposals.id, proposalId),
+            eq(circleJoinProposals.status, "pending_approval"),
+          ),
+        );
+      expired = true;
+      return;
+    }
     await transaction
       .update(circleProposalApprovals)
       .set({
@@ -874,13 +1453,19 @@ export async function respondToCircleProposal(
         and(
           eq(circleProposalApprovals.proposalId, proposalId),
           eq(circleProposalApprovals.userId, userId),
+          eq(circleProposalApprovals.decision, "pending"),
         ),
       );
     if (decision === "decline") {
       await transaction
         .update(circleJoinProposals)
         .set({ status: "declined", resolvedAt: now })
-        .where(eq(circleJoinProposals.id, proposalId));
+        .where(
+          and(
+            eq(circleJoinProposals.id, proposalId),
+            eq(circleJoinProposals.status, "pending_approval"),
+          ),
+        );
       return;
     }
     const remaining = await transaction
@@ -896,27 +1481,58 @@ export async function respondToCircleProposal(
       await transaction
         .update(circleJoinProposals)
         .set({ status: "awaiting_candidate" })
-        .where(eq(circleJoinProposals.id, proposalId));
+        .where(
+          and(
+            eq(circleJoinProposals.id, proposalId),
+            eq(circleJoinProposals.status, "pending_approval"),
+          ),
+        );
     }
   });
+  if (expired) throw new Error("这项邀请已经过期。");
 }
 
 export async function leaveCircle(userId: string, circleId: string) {
-  const activeMembership = await getActiveCircleMembership(userId, circleId);
-  if (!activeMembership) {
-    throw new Error("你已经不在这个圈子的活跃关系中了。");
-  }
-
   await db.transaction(async (transaction) => {
     const [circle] = await transaction
       .select({
         name: circles.name,
         description: circles.description,
+        status: circles.status,
+        createdAt: circles.createdAt,
       })
       .from(circles)
       .where(eq(circles.id, circleId))
-      .limit(1);
-    if (!circle) throw new Error("这个圈子不存在。");
+      .limit(1)
+      .for("update");
+    if (!circle || circle.status !== "active") {
+      throw new Error("这个圈子目前不能退出活跃关系。");
+    }
+
+    const [activeMembership] = await transaction
+      .select({
+        id: circleMembershipPeriods.id,
+        relationId: circleMemberRelations.id,
+        historyVisibleFrom: circleMemberRelations.historyVisibleFrom,
+      })
+      .from(circleMemberRelations)
+      .innerJoin(
+        circleMembershipPeriods,
+        eq(circleMemberRelations.activePeriodId, circleMembershipPeriods.id),
+      )
+      .where(
+        and(
+          eq(circleMemberRelations.userId, userId),
+          eq(circleMemberRelations.circleId, circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+          isNull(circleMembershipPeriods.leftAt),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!activeMembership) {
+      throw new Error("你已经不在这个圈子的活跃关系中了。");
+    }
 
     const visiblePosts = await transaction
       .select({
@@ -963,6 +1579,25 @@ export async function leaveCircle(userId: string, circleId: string) {
           .from(postMedia)
           .where(inArray(postMedia.postId, sourcePostIds))
       : [];
+    const pendingApprovalRows = await transaction
+      .select({ proposalId: circleProposalApprovals.proposalId })
+      .from(circleProposalApprovals)
+      .innerJoin(
+        circleJoinProposals,
+        eq(circleProposalApprovals.proposalId, circleJoinProposals.id),
+      )
+      .where(
+        and(
+          eq(circleProposalApprovals.userId, userId),
+          eq(circleProposalApprovals.decision, "pending"),
+          eq(circleJoinProposals.circleId, circleId),
+          eq(circleJoinProposals.status, "pending_approval"),
+        ),
+      )
+      .for("update");
+    const affectedProposalIds = [
+      ...new Set(pendingApprovalRows.map((row) => row.proposalId)),
+    ];
 
     await transaction
       .delete(circleExitSnapshots)
@@ -992,21 +1627,347 @@ export async function leaveCircle(userId: string, circleId: string) {
       .where(eq(circleMembershipPeriods.id, activeMembership.id));
     await transaction
       .update(circleMemberRelations)
-      .set({ activePeriodId: null })
+      .set({ activePeriodId: null, activeSlot: null })
       .where(eq(circleMemberRelations.id, activeMembership.relationId));
-    await transaction
-      .update(circles)
-      .set({ updatedAt: capturedAt })
-      .where(eq(circles.id, circleId));
+    const remainingActiveMembers = await transaction
+      .select({ id: circleMemberRelations.id })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      );
+    const isLastActiveMember = remainingActiveMembers.length === 0;
+    if (isLastActiveMember) {
+      const activeProposalRows = await transaction
+        .select({ id: circleJoinProposals.id })
+        .from(circleJoinProposals)
+        .where(
+          and(
+            eq(circleJoinProposals.circleId, circleId),
+            inArray(circleJoinProposals.status, [...activeProposalStatuses]),
+          ),
+        )
+        .for("update");
+      const activeProposalIds = activeProposalRows.map((proposal) => proposal.id);
+      if (activeProposalIds.length) {
+        await transaction
+          .update(circleJoinProposals)
+          .set({ status: "invalidated", resolvedAt: capturedAt })
+          .where(inArray(circleJoinProposals.id, activeProposalIds));
+        await transaction
+          .delete(circleProposalApprovals)
+          .where(inArray(circleProposalApprovals.proposalId, activeProposalIds));
+      }
+      await transaction
+        .update(circles)
+        .set({
+          status: "frozen",
+          frozenAt: capturedAt,
+          deleteAt: getCircleDeleteAt(circle.createdAt, capturedAt),
+          recoverableByUserId: userId,
+          updatedAt: capturedAt,
+        })
+        .where(eq(circles.id, circleId));
+    } else if (affectedProposalIds.length) {
+      await transaction
+        .delete(circleProposalApprovals)
+        .where(
+          and(
+            eq(circleProposalApprovals.userId, userId),
+            eq(circleProposalApprovals.decision, "pending"),
+            inArray(circleProposalApprovals.proposalId, affectedProposalIds),
+          ),
+        );
+      const remainingApprovalRows = await transaction
+        .select({ proposalId: circleProposalApprovals.proposalId })
+        .from(circleProposalApprovals)
+        .where(
+          and(
+            inArray(circleProposalApprovals.proposalId, affectedProposalIds),
+            eq(circleProposalApprovals.decision, "pending"),
+          ),
+        );
+      const proposalsStillPending = new Set(
+        remainingApprovalRows.map((row) => row.proposalId),
+      );
+      const approvedProposalIds = affectedProposalIds.filter(
+        (proposalId) => !proposalsStillPending.has(proposalId),
+      );
+      if (approvedProposalIds.length) {
+        await transaction
+          .update(circleJoinProposals)
+          .set({ status: "awaiting_candidate" })
+          .where(
+            and(
+              inArray(circleJoinProposals.id, approvedProposalIds),
+              eq(circleJoinProposals.status, "pending_approval"),
+            ),
+          );
+      }
+    }
+    if (!isLastActiveMember) {
+      await transaction
+        .update(circles)
+        .set({ updatedAt: capturedAt })
+        .where(eq(circles.id, circleId));
+    }
     await transaction.insert(circleEvents).values({
       id: randomUUID(),
       circleId,
       actorId: userId,
       type: "member_left",
-      message: "退出了圈子的活跃关系，过去的共同记录已保存为历史档案。",
+      message: isLastActiveMember
+        ? "作为最后一位活跃成员退出，圈子已冻结并进入删除倒计时。"
+        : "退出了圈子的活跃关系，过去的共同记录已保存为历史档案。",
       createdAt: capturedAt,
     });
   });
+}
+
+export async function restoreFrozenCircle(userId: string, circleId: string) {
+  let archivedMediaIds: string[] = [];
+  await db.transaction(async (transaction) => {
+    const [circle] = await transaction
+      .select({
+        status: circles.status,
+        deleteAt: circles.deleteAt,
+        recoverableByUserId: circles.recoverableByUserId,
+      })
+      .from(circles)
+      .where(eq(circles.id, circleId))
+      .limit(1)
+      .for("update");
+    const now = new Date();
+    if (
+      !circle ||
+      circle.status !== "frozen" ||
+      circle.recoverableByUserId !== userId ||
+      !circle.deleteAt ||
+      now >= circle.deleteAt
+    ) {
+      throw new Error("这个圈子目前不能恢复。");
+    }
+    const [relation] = await transaction
+      .select({
+        id: circleMemberRelations.id,
+        activePeriodId: circleMemberRelations.activePeriodId,
+      })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, circleId),
+          eq(circleMemberRelations.userId, userId),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!relation || relation.activePeriodId) {
+      throw new Error("恢复关系状态不正确。");
+    }
+    const activeMembers = await transaction
+      .select({ id: circleMemberRelations.id })
+      .from(circleMemberRelations)
+      .where(
+        and(
+          eq(circleMemberRelations.circleId, circleId),
+          isNotNull(circleMemberRelations.activePeriodId),
+        ),
+      );
+    if (activeMembers.length) throw new Error("这个圈子已经恢复。");
+
+    const [snapshot] = await transaction
+      .select({ id: circleExitSnapshots.id })
+      .from(circleExitSnapshots)
+      .where(eq(circleExitSnapshots.relationId, relation.id))
+      .limit(1);
+    if (snapshot) {
+      const mediaRows = await transaction
+        .select({ mediaId: circleExitSnapshotMedia.mediaId })
+        .from(circleExitSnapshotMedia)
+        .innerJoin(
+          circleExitSnapshotPosts,
+          eq(circleExitSnapshotMedia.snapshotPostId, circleExitSnapshotPosts.id),
+        )
+        .where(eq(circleExitSnapshotPosts.exitSnapshotId, snapshot.id));
+      archivedMediaIds = [...new Set(mediaRows.map((row) => row.mediaId))];
+    }
+
+    const periodId = randomUUID();
+    await transaction.insert(circleMembershipPeriods).values({
+      id: periodId,
+      relationId: relation.id,
+      joinedAt: now,
+      lastViewedAt: now,
+    });
+    await transaction
+      .update(circleMemberRelations)
+      .set({ activePeriodId: periodId, activeSlot: 1 })
+      .where(eq(circleMemberRelations.id, relation.id));
+    await transaction
+      .delete(circleExitSnapshots)
+      .where(eq(circleExitSnapshots.relationId, relation.id));
+    await transaction
+      .update(circles)
+      .set({
+        status: "active",
+        frozenAt: null,
+        deleteAt: null,
+        recoverableByUserId: null,
+        updatedAt: now,
+      })
+      .where(eq(circles.id, circleId));
+    await transaction.insert(circleEvents).values({
+      id: randomUUID(),
+      circleId,
+      actorId: userId,
+      type: "circle_restored",
+      message: "恢复了这个小圈子，历史记录停止删除倒计时。",
+      createdAt: now,
+    });
+  });
+  await Promise.all(
+    archivedMediaIds.map((mediaId) => deleteMediaAsset(mediaId)),
+  );
+}
+
+async function deleteExpiredFrozenCircles(now: Date) {
+  const candidates = await db
+    .select({ id: circles.id })
+    .from(circles)
+    .where(and(eq(circles.status, "frozen"), lte(circles.deleteAt, now)))
+    .limit(100);
+  let deleted = 0;
+  for (const candidate of candidates) {
+    const mediaIds = await db.transaction(async (transaction) => {
+      const [circle] = await transaction
+        .select({
+          status: circles.status,
+          deleteAt: circles.deleteAt,
+        })
+        .from(circles)
+        .where(eq(circles.id, candidate.id))
+        .limit(1)
+        .for("update");
+      if (
+        !circle ||
+        circle.status !== "frozen" ||
+        !circle.deleteAt ||
+        circle.deleteAt > now
+      ) {
+        return [];
+      }
+      const activeMembers = await transaction
+        .select({ id: circleMemberRelations.id })
+        .from(circleMemberRelations)
+        .where(
+          and(
+            eq(circleMemberRelations.circleId, candidate.id),
+            isNotNull(circleMemberRelations.activePeriodId),
+          ),
+        );
+      if (activeMembers.length) return [];
+
+      const [postMediaRows, draftMediaRows, archiveMediaRows] =
+        await Promise.all([
+          transaction
+            .select({ mediaId: postMedia.mediaId })
+            .from(postMedia)
+            .innerJoin(posts, eq(postMedia.postId, posts.id))
+            .where(eq(posts.circleId, candidate.id)),
+          transaction
+            .select({ mediaId: draftMedia.mediaId })
+            .from(draftMedia)
+            .innerJoin(drafts, eq(draftMedia.draftId, drafts.id))
+            .where(eq(drafts.circleId, candidate.id)),
+          transaction
+            .select({ mediaId: circleExitSnapshotMedia.mediaId })
+            .from(circleExitSnapshotMedia)
+            .innerJoin(
+              circleExitSnapshotPosts,
+              eq(
+                circleExitSnapshotMedia.snapshotPostId,
+                circleExitSnapshotPosts.id,
+              ),
+            )
+            .innerJoin(
+              circleExitSnapshots,
+              eq(
+                circleExitSnapshotPosts.exitSnapshotId,
+                circleExitSnapshots.id,
+              ),
+            )
+            .innerJoin(
+              circleMemberRelations,
+              eq(circleExitSnapshots.relationId, circleMemberRelations.id),
+            )
+            .where(eq(circleMemberRelations.circleId, candidate.id)),
+        ]);
+      const collectedMediaIds = [
+        ...new Set(
+          [...postMediaRows, ...draftMediaRows, ...archiveMediaRows].map(
+            (row) => row.mediaId,
+          ),
+        ),
+      ];
+      await transaction.delete(drafts).where(eq(drafts.circleId, candidate.id));
+      await transaction.delete(posts).where(eq(posts.circleId, candidate.id));
+      await transaction.delete(circles).where(eq(circles.id, candidate.id));
+      if (collectedMediaIds.length) {
+        await transaction
+          .update(mediaAssets)
+          .set({ status: "deleting", updatedAt: now })
+          .where(
+            and(
+              inArray(mediaAssets.id, collectedMediaIds),
+              notExists(
+                transaction
+                  .select({ id: postMedia.mediaId })
+                  .from(postMedia)
+                  .where(eq(postMedia.mediaId, mediaAssets.id)),
+              ),
+              notExists(
+                transaction
+                  .select({ id: draftMedia.mediaId })
+                  .from(draftMedia)
+                  .where(eq(draftMedia.mediaId, mediaAssets.id)),
+              ),
+              notExists(
+                transaction
+                  .select({ id: circleExitSnapshotMedia.mediaId })
+                  .from(circleExitSnapshotMedia)
+                  .where(eq(circleExitSnapshotMedia.mediaId, mediaAssets.id)),
+              ),
+            ),
+          );
+      }
+      deleted += 1;
+      return collectedMediaIds;
+    });
+    await Promise.all(mediaIds.map((mediaId) => deleteMediaAsset(mediaId)));
+  }
+  return deleted;
+}
+
+export async function maintainCircles(now = new Date()) {
+  const settledCreationRequests =
+    await settleExpiredCircleCreationRequests(now);
+  await expireCircleProposals(now);
+  const deletedCircles = await deleteExpiredFrozenCircles(now);
+  const deletingMedia = await db
+    .select({ id: mediaAssets.id })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.status, "deleting"))
+    .limit(100);
+  await Promise.all(
+    deletingMedia.map((media) => deleteMediaAsset(media.id)),
+  );
+  return {
+    settledCreationRequests,
+    deletedCircles,
+    retriedMedia: deletingMedia.length,
+  };
 }
 
 export async function deleteCircleExitArchive(userId: string, circleId: string) {

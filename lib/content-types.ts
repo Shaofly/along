@@ -52,8 +52,13 @@ export type CircleSummary = {
   id: string;
   name: string;
   description: string;
-  status: "forming" | "active" | "dissolved";
+  status: "active" | "frozen" | "dissolved";
   isActive: boolean;
+  isArchived?: boolean;
+  capturedAt?: string | null;
+  frozenAt?: string | null;
+  deleteAt?: string | null;
+  canRestore?: boolean;
   members: Array<{
     id: string;
     name: string;

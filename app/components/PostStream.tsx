@@ -56,6 +56,8 @@ export function PostStream({
   } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [terminalConflict, setTerminalConflict] = useState("");
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!posts.some((post) => post.publicationStatus === "publishing")) return;
@@ -70,32 +72,57 @@ export function PostStream({
     setEditViewerIds(post.viewerIds);
     setEditManagementMode(post.managementMode);
     setError("");
+    setTerminalConflict("");
+    setConflictDialogOpen(false);
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setError("");
+    setTerminalConflict("");
+    setConflictDialogOpen(false);
   }
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editing) return;
+    if (!editing || terminalConflict) return;
     setPending(true);
     setError("");
-    const response = await fetch(`/api/posts/${editing.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        body: editBody,
-        visibility: editVisibility,
-        viewerIds: editVisibility === "selected" ? editViewerIds : [],
-        managementMode: editing.circle ? editManagementMode : undefined,
-        expectedUpdatedAt: editing.updatedAt,
-      }),
-    });
-    const result = (await response.json()) as { error?: string };
-    setPending(false);
-    if (!response.ok) {
-      setError(result.error ?? "保存失败。");
-      return;
+    try {
+      const response = await fetch(`/api/posts/${editing.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          body: editBody,
+          visibility: editVisibility,
+          viewerIds: editVisibility === "selected" ? editViewerIds : [],
+          managementMode: editing.circle ? editManagementMode : undefined,
+          expectedUpdatedAt: editing.updatedAt,
+        }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        terminal?: boolean;
+      };
+      if (!response.ok) {
+        if (result.terminal) {
+          const message =
+            result.error ??
+            "这次修改已经无法保存。请先复制需要保留的内容，再取消修改并重新打开。";
+          setTerminalConflict(message);
+          setConflictDialogOpen(true);
+          return;
+        }
+        setError(result.error ?? "保存失败。");
+        return;
+      }
+      cancelEdit();
+      router.refresh();
+    } catch {
+      setError("网络连接中断了，内容仍然保留，可以稍后重新保存。");
+    } finally {
+      setPending(false);
     }
-    setEditing(null);
-    router.refresh();
   }
 
   async function removePost(post: FeedPost) {
@@ -190,9 +217,15 @@ export function PostStream({
       })}
 
       {editing ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setEditing(null)}>
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => {
+            if (!terminalConflict) cancelEdit();
+          }}
+        >
           <form className="edit-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={saveEdit}>
-            <header><h2>编辑动态</h2><button onClick={() => setEditing(null)} type="button" aria-label="关闭">×</button></header>
+            <header><h2>编辑动态</h2><button onClick={cancelEdit} type="button" aria-label="取消修改">×</button></header>
             <DissolveTextarea
               aria-label="动态正文"
               maxLength={5000}
@@ -248,10 +281,55 @@ export function PostStream({
               </fieldset>
             </AnimatedReveal>
             {error ? <p className="composer-error">{error}</p> : null}
-            <button className="publish-button" disabled={pending} type="submit">
-              {pending ? "正在保存" : "保存修改"}
-            </button>
+            {terminalConflict ? (
+              <p className="composer-error">
+                当前修改已不能保存。你仍可以继续输入或复制内容，完成后请取消修改。
+              </p>
+            ) : null}
+            <div className="composer-submit-actions">
+              <button
+                className="composer-close-action"
+                disabled={pending}
+                onClick={cancelEdit}
+                type="button"
+              >
+                取消修改
+              </button>
+              <button
+                className="publish-button"
+                disabled={pending || Boolean(terminalConflict)}
+                type="submit"
+              >
+                {pending ? "正在保存" : "保存修改"}
+              </button>
+            </div>
           </form>
+          {conflictDialogOpen ? (
+            <div
+              className="draft-dialog-backdrop"
+              onMouseDown={(event) => event.stopPropagation()}
+              role="presentation"
+            >
+              <div
+                aria-labelledby="edit-conflict-title"
+                aria-modal="true"
+                className="draft-dialog"
+                role="alertdialog"
+              >
+                <h2 id="edit-conflict-title">这次修改无法保存</h2>
+                <p>{terminalConflict}</p>
+                <div className="draft-dialog-actions">
+                  <button
+                    className="draft-save-action"
+                    onClick={() => setConflictDialogOpen(false)}
+                    type="button"
+                  >
+                    我知道了
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { maintainCircles } from "@/lib/circles";
 import { maintainLocalMedia } from "@/lib/media/service";
 
 export async function POST(request: Request) {
@@ -9,5 +10,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未授权。" }, { status: 401 });
   }
 
-  return NextResponse.json(await maintainLocalMedia());
+  const [media, circleLifecycle] = await Promise.all([
+    maintainLocalMedia(),
+    maintainCircles(),
+  ]);
+  return NextResponse.json({ media, circleLifecycle });
 }

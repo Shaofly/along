@@ -35,10 +35,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "初始成员必须是你的直接朋友。" }, { status: 403 });
   }
 
-  const circleId = await createCircle(session.user.id, {
+  const requestId = await createCircle(session.user.id, {
     name: parsed.data.name,
     description: parsed.data.description,
     invitedUserIds,
   });
-  return NextResponse.json({ ok: true, circleId });
+  return NextResponse.json({ ok: true, requestId });
 }

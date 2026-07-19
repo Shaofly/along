@@ -59,13 +59,12 @@ export const mediaJobStatus = pgEnum("media_job_status", [
 ]);
 
 export const circleStatus = pgEnum("circle_status", [
-  "forming",
   "active",
+  "frozen",
   "dissolved",
 ]);
 
 export const circleProposalKind = pgEnum("circle_proposal_kind", [
-  "initial",
   "add",
   "rejoin",
 ]);
@@ -76,6 +75,7 @@ export const circleProposalStatus = pgEnum("circle_proposal_status", [
   "accepted",
   "declined",
   "expired",
+  "invalidated",
 ]);
 
 export const circleApprovalDecision = pgEnum("circle_approval_decision", [
@@ -83,6 +83,17 @@ export const circleApprovalDecision = pgEnum("circle_approval_decision", [
   "approved",
   "declined",
 ]);
+
+export const circleCreationStatus = pgEnum("circle_creation_status", [
+  "pending",
+  "formed",
+  "failed",
+]);
+
+export const circleCreationInviteStatus = pgEnum(
+  "circle_creation_invite_status",
+  ["pending", "accepted", "declined", "expired"],
+);
 
 export const circleManagementMode = pgEnum("circle_management_mode", [
   "creator",
@@ -342,7 +353,7 @@ export const circles = pgTable(
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     description: text("description").default("").notNull(),
-    status: circleStatus("status").default("forming").notNull(),
+    status: circleStatus("status").default("active").notNull(),
     createdById: text("created_by_id")
       .notNull()
       .references(() => user.id),
@@ -352,10 +363,16 @@ export const circles = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    frozenAt: timestamp("frozen_at", { withTimezone: true }),
+    deleteAt: timestamp("delete_at", { withTimezone: true }),
+    recoverableByUserId: text("recoverable_by_user_id").references(
+      () => user.id,
+    ),
     dissolvedAt: timestamp("dissolved_at", { withTimezone: true }),
   },
   (table) => [
     index("circles_status_updated_idx").on(table.status, table.updatedAt),
+    index("circles_frozen_delete_idx").on(table.status, table.deleteAt),
     index("circles_created_by_idx").on(table.createdById),
     check("circles_name_not_blank", sql`btrim(${table.name}) <> ''`),
     check("circles_name_length", sql`char_length(${table.name}) <= 80`),
@@ -365,6 +382,106 @@ export const circles = pgTable(
       "circles_dissolution_consistent",
       sql`(${table.status} = 'dissolved' and ${table.dissolvedAt} is not null)
         or (${table.status} <> 'dissolved' and ${table.dissolvedAt} is null)`,
+    ),
+    check(
+      "circles_freeze_consistent",
+      sql`(${table.status} = 'frozen'
+          and ${table.frozenAt} is not null
+          and ${table.deleteAt} is not null
+          and ${table.deleteAt} > ${table.frozenAt}
+          and ${table.recoverableByUserId} is not null)
+        or (${table.status} <> 'frozen'
+          and ${table.frozenAt} is null
+          and ${table.deleteAt} is null
+          and ${table.recoverableByUserId} is null)`,
+    ),
+  ],
+);
+
+export const circleCreationRequests = pgTable(
+  "circle_creation_requests",
+  {
+    id: text("id").primaryKey(),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => user.id),
+    name: text("name").notNull(),
+    description: text("description").default("").notNull(),
+    status: circleCreationStatus("status").default("pending").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    formedCircleId: text("formed_circle_id").references(() => circles.id, {
+      onDelete: "cascade",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    purgeAt: timestamp("purge_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("circle_creation_requests_creator_status_idx").on(
+      table.creatorId,
+      table.status,
+    ),
+    index("circle_creation_requests_expiry_idx").on(table.status, table.expiresAt),
+    index("circle_creation_requests_purge_idx").on(table.status, table.purgeAt),
+    uniqueIndex("circle_creation_requests_formed_circle_idx")
+      .on(table.formedCircleId)
+      .where(sql`${table.formedCircleId} is not null`),
+    check("circle_creation_requests_name_not_blank", sql`btrim(${table.name}) <> ''`),
+    check(
+      "circle_creation_requests_name_length",
+      sql`char_length(${table.name}) <= 80`,
+    ),
+    check(
+      "circle_creation_requests_description_length",
+      sql`char_length(${table.description}) <= 500`,
+    ),
+    check(
+      "circle_creation_requests_expiry_after_creation",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "circle_creation_requests_resolution_consistent",
+      sql`(${table.status} = 'pending'
+          and ${table.resolvedAt} is null
+          and ${table.formedCircleId} is null
+          and ${table.purgeAt} is null)
+        or (${table.status} = 'formed'
+          and ${table.resolvedAt} is not null
+          and ${table.formedCircleId} is not null
+          and ${table.purgeAt} is null)
+        or (${table.status} = 'failed'
+          and ${table.resolvedAt} is not null
+          and ${table.formedCircleId} is null
+          and ${table.purgeAt} is not null
+          and ${table.purgeAt} > ${table.resolvedAt})`,
+    ),
+  ],
+);
+
+export const circleCreationInvitees = pgTable(
+  "circle_creation_invitees",
+  {
+    requestId: text("request_id")
+      .notNull()
+      .references(() => circleCreationRequests.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => user.id),
+    status: circleCreationInviteStatus("status").default("pending").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.requestId, table.candidateId] }),
+    index("circle_creation_invitees_candidate_status_idx").on(
+      table.candidateId,
+      table.status,
+    ),
+    check(
+      "circle_creation_invitees_resolution_consistent",
+      sql`(${table.status} = 'pending' and ${table.resolvedAt} is null)
+        or (${table.status} <> 'pending' and ${table.resolvedAt} is not null)`,
     ),
   ],
 );
@@ -386,6 +503,7 @@ export const circleMemberRelations = pgTable(
       (): AnyPgColumn => circleMembershipPeriods.id,
       { onDelete: "set null" },
     ),
+    activeSlot: integer("active_slot"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -402,6 +520,18 @@ export const circleMemberRelations = pgTable(
     index("circle_member_relations_circle_active_idx").on(
       table.circleId,
       table.activePeriodId,
+    ),
+    uniqueIndex("circle_member_relations_circle_slot_idx")
+      .on(table.circleId, table.activeSlot)
+      .where(sql`${table.activeSlot} is not null`),
+    check(
+      "circle_member_relations_active_slot_range",
+      sql`${table.activeSlot} is null or ${table.activeSlot} between 1 and 10`,
+    ),
+    check(
+      "circle_member_relations_active_slot_consistent",
+      sql`(${table.activePeriodId} is null and ${table.activeSlot} is null)
+        or (${table.activePeriodId} is not null and ${table.activeSlot} is not null)`,
     ),
   ],
 );
@@ -484,7 +614,7 @@ export const circleJoinProposals = pgTable(
     check(
       "circle_proposals_resolution_consistent",
       sql`(${table.status} in ('pending_approval', 'awaiting_candidate') and ${table.resolvedAt} is null)
-        or (${table.status} in ('accepted', 'declined', 'expired') and ${table.resolvedAt} is not null)`,
+        or (${table.status} in ('accepted', 'declined', 'expired', 'invalidated') and ${table.resolvedAt} is not null)`,
     ),
   ],
 );
@@ -749,6 +879,9 @@ export const mediaAssets = pgTable(
     mimeType: text("mime_type").notNull(),
     byteSize: integer("byte_size").notNull(),
     status: mediaStatus("status").default("ready").notNull(),
+    contentCommittedAt: timestamp("content_committed_at", {
+      withTimezone: true,
+    }),
     sourceMimeType: text("source_mime_type"),
     sourceByteSize: bigint("source_byte_size", { mode: "number" }),
     sourceWidth: integer("source_width"),

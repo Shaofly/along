@@ -7,7 +7,9 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 数据能力 | 状态 | 当前实现证据 | 说明 |
 | --- | --- | --- | --- |
 | 认证、邀请、朋友关系与个人内容 | `已实现` | `db/schema.ts`、认证与邀请领域服务 | 已进入当前可用流程 |
+| 建圈批次与 24 小时统一结算 | `已实现` | `circle_creation_requests`、`circle_creation_invitees` | 结算前不存在正式圈子 |
 | 持久圈子成员关系与多次成员周期 | `已实现` | `circle_member_relations`、`circle_membership_periods`、`lib/circles.ts` | 活跃状态通过当前周期指针加速查询 |
+| 圈子冻结、恢复与到期硬删除 | `已实现` | `circles.frozen_at`、`delete_at`、`recoverable_by_user_id` | 依赖内部维护任务按时执行 |
 | 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
 | 圈子动态参与者 | `部分实现` | `post_participants`、发布与编辑接口 | 首页圈子发布路径、草稿和编辑弹窗仍需补齐 |
 | 地点与地图表 | `已确认设计` | [地图与地点功能](features/map.md) | 当前 Schema 尚无地点表 |
@@ -19,7 +21,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | --- | --- |
 | 认证 | `user`、`session`、`account`、`verification` |
 | 邀请与关系 | `invitations`、`invitation_sponsors`、`friendships`、`friend_remarks` |
-| 小圈子 | `circles`、`circle_member_relations`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
+| 小圈子 | `circle_creation_requests`、`circle_creation_invitees`、`circles`、`circle_member_relations`、`circle_membership_periods`、`circle_join_proposals`、`circle_proposal_approvals`、`circle_events` |
 | 内容 | `posts`、`post_viewers`、`post_participants`、`drafts`、`draft_viewers` |
 | 退出档案 | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` |
 | 媒体 | `media_assets`、`media_variants`、`media_upload_sessions`、`media_processing_jobs`、`post_media`、`draft_media` |
@@ -32,7 +34,8 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - `friend_remarks` 以“设置者 + 被备注的朋友”为唯一键保存单向私有备注。备注不放进 `friendships` 的单个共享字段，避免双方互相覆盖。
 - `circle_member_relations` 以“圈子 + 用户”为唯一键保存持久授权关系；`history_visible_from（最早获准查看内容时间）`不会因退出或重新加入而重算。
 - `circle_member_relations.active_period_id（当前活跃成员周期编号）`不为空表示当前是活跃成员，为空表示当前不在圈子。它是常用权限查询的快速指针，不替代成员周期事实。
-- `circle_membership_periods.circle_nickname` 保存该次成员期的圈子昵称。退出与再次加入是不同成员期，因此可以保留历史身份并在新周期重新设置。
+- `circle_member_relations.active_slot（当前活跃席位）`与活跃周期指针同时存在或同时为空；每个活跃圈子只允许使用 1 至 10 的唯一席位。
+- `circle_membership_periods.circle_nickname` 保存该次成员期的圈子昵称。退出与再次加入是不同成员期，新周期不会继承旧值；页面只使用当前活跃周期的圈子昵称，已经结束的周期不再向用户展示旧昵称。
 - `circle_membership_periods.last_viewed_at` 保存该次活跃成员期最近真正进入圈子的时间；退出后旧周期不再更新，再次加入从新周期重新计算未读。
 - `post_participants` 保存圈子动态明确标记的参与者。作者必须是参与者；编辑者、媒体上传者和普通可见者不会自动成为参与者。
 - `user.bio` 是个人简介的唯一字段，首页可以把它按单行个性签名展示，不增加重复的 `signature` 字段。
@@ -54,19 +57,29 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 同一认证提供方账号只能绑定一次；好友双方必须不同，并通过 `least` / `greatest` 无序唯一索引阻止反向重复关系。
 - 邀请人数限制为 2 至 5，使用状态与使用人、使用时间必须一致。
 - 圈子名称不能为空，名称和简介长度受限，解散状态必须带解散时间。
+- 建圈请求有效期晚于创建时间，待处理、已建立和失败三种状态分别约束解决时间、正式圈子引用和结果清理时间；受邀者未处理状态不能带解决时间。
+- 正式圈子不使用`forming（建立中）`状态。建圈请求全部终结且至少一人接受后，才在一个事务中创建`active（活跃）`圈子和首批成员。
+- `frozen（冻结）`圈子必须同时带冻结时间、未来删除时间和可恢复人；非冻结圈子不得残留这些字段。
 - 成员退出时间不能早于加入时间，同一持久关系最多只有一个开放成员周期。
 - 同一用户与同一圈子只有一条持久成员关系。
 - `active_period_id（当前活跃成员周期编号）`必须指向同一持久关系中的开放周期；每个开放周期也必须是该关系的当前指针。数据库使用可延迟约束触发器在事务提交时验证双向一致性。
+- 活跃周期指针与`active_slot（当前活跃席位）`必须同时存在；席位限定为 1 至 10 且在圈内唯一，因此数据库层无法提交第 11 位活跃成员。调整产品上限时必须用新迁移修改席位范围约束。
+- `active（活跃）`圈子提交时至少有一位活跃成员，`frozen（冻结）`或`dissolved（已解散）`圈子不能保留活跃成员；跨表生命周期由可延迟约束触发器验证。
 - 成员最近查看时间不能早于加入时间；圈子未读由服务端按活跃成员期的查看时间、内容权限和事件时间计算。
 - 同一圈子和候选人最多只有一项待处理加入提案，提案状态与解决时间一致。
+- 加入提案的审批行记录提案创建时需要参与的成员，不因之后有新成员加入而扩张；成员退出事务删除其尚未处理的审批行，并按该提案剩余审批行重新计算状态。
+- 会改变或依赖圈子成员集合的服务端事务先使用`SELECT ... FOR UPDATE`锁定对应圈子行，再读取成员、人数和提案状态；10 位活跃成员上限以及提案创建时的审批集合由该圈子级串行顺序保证。
+- 圈子动态发布、编辑、删除、媒体发布状态结算与退出档案快照使用相同的圈子行锁顺序。动态编辑还会锁定目标动态、在锁内比较客户端看到的`updated_at（最后编辑时间）`，并使用带旧版本条件的`UPDATE ... RETURNING`阻止并发覆盖。
+- 最后一位活跃成员退出时，事务会让所有未完成加入提案进入`invalidated（已失效）`并冻结圈子。后台在`delete_at（删除时间）`后级联删除正式圈子和全部历史关系；删除时间到达后业务接口不再允许恢复，不能依赖清理任务是否已经运行判断权限。
 - 个人内容不能使用圈内共同管理，圈子内容在通用可见范围字段中必须保持 private，由圈子成员周期单独授权。
 - 草稿沿用正式内容的可见范围与管理方式约束，但始终只允许作者通过草稿接口读取；指定查看者和圈子仅用于恢复发布设置，不会让其他人提前看到草稿。
 - 每个媒体资源最多关联一条草稿，草稿内位置保持 0 至 19 唯一；草稿被放弃时，未进入正式内容的私有媒体一并清理，发布成功时只删除草稿关系而保留正式媒体。
 - 正文长度、媒体字节数和单条内容的媒体排序位置有数据库级边界。
 - `media_assets` 是逻辑资源，`media_variants` 以“媒体 + 变体类型”为主键保存 `thumbnail`、`preview`、`hd` 三个正式对象。
+- `media_assets.content_committed_at（正式内容绑定时间）`在首次写入正式动态或退出档案媒体关联时由数据库触发器设置。已有值不可清空或改写，上传者直通只能用于仍在有效上传会话中的未正式绑定资源。
 - `media_upload_sessions` 保存 incoming Key、预期类型和大小以及 24 小时过期时间；`media_processing_jobs` 保存处理提供方、尝试次数和失败原因。
 - 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
-- 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。
+- 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。媒体后台结算只改变发布状态，不冒充用户正文编辑或推进正文并发版本。
 - 每条退出档案属于一条持久成员关系，同一关系最多保留一份当前退出档案。
 - 退出档案正文与媒体顺序保存在独立冻结表中；成员构成通过不可变成员周期和`captured_at（档案冻结时间）`重建，不额外保存人物资料快照。
 - 退出档案只引用逻辑媒体，不复制图片字节。媒体仍被动态、草稿或任一退出档案引用时，不允许删除底层资源。

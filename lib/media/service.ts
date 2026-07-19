@@ -2,10 +2,11 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, notExists } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  circles,
   circleExitSnapshotMedia,
   mediaAssets,
   draftMedia,
@@ -305,7 +306,10 @@ export async function deleteMediaAsset(mediaId: string) {
     .from(mediaUploadSessions)
     .where(eq(mediaUploadSessions.mediaId, mediaId));
 
-  await db.delete(mediaAssets).where(eq(mediaAssets.id, mediaId));
+  await db
+    .update(mediaAssets)
+    .set({ status: "deleting", updatedAt: new Date() })
+    .where(eq(mediaAssets.id, mediaId));
   const currentKeys = new Set([
     ...variants.map((variant) => variant.storageKey),
     ...sessions.map((session) => session.incomingKey),
@@ -315,6 +319,7 @@ export async function deleteMediaAsset(mediaId: string) {
     const { deleteStoredFile } = await import("@/lib/storage");
     await deleteStoredFile(asset.storageKey);
   }
+  await db.delete(mediaAssets).where(eq(mediaAssets.id, mediaId));
   return true;
 }
 
@@ -326,32 +331,66 @@ export async function reconcilePublishingPosts(mediaIds: string[]) {
     .where(inArray(postMedia.mediaId, mediaIds));
   const postIds = [...new Set(links.map((link) => link.postId))];
   for (const postId of postIds) {
-    const linked = await db
-      .select({ status: mediaAssets.status })
-      .from(postMedia)
-      .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
-      .where(eq(postMedia.postId, postId));
-    if (linked.some((asset) => asset.status === "failed")) {
-      await db
-        .update(posts)
-        .set({
-          publicationStatus: "failed",
-          publicationError: "部分照片处理失败，请重试。",
-          updatedAt: new Date(),
+    const [target] = await db
+      .select({ circleId: posts.circleId })
+      .from(posts)
+      .where(eq(posts.id, postId))
+      .limit(1);
+    if (!target) continue;
+
+    await db.transaction(async (transaction) => {
+      if (target.circleId) {
+        await transaction
+          .select({ id: circles.id })
+          .from(circles)
+          .where(eq(circles.id, target.circleId))
+          .limit(1)
+          .for("update");
+      }
+      const [lockedPost] = await transaction
+        .select({
+          circleId: posts.circleId,
+          publicationStatus: posts.publicationStatus,
         })
-        .where(eq(posts.id, postId));
-    } else if (linked.length > 0 && linked.every((asset) => asset.status === "ready")) {
-      const publishedAt = new Date();
-      await db
-        .update(posts)
-        .set({
-          publicationStatus: "published",
-          publicationError: null,
-          publishedAt,
-          updatedAt: publishedAt,
-        })
-        .where(eq(posts.id, postId));
-    }
+        .from(posts)
+        .where(eq(posts.id, postId))
+        .limit(1)
+        .for("update");
+      if (
+        !lockedPost ||
+        lockedPost.circleId !== target.circleId ||
+        lockedPost.publicationStatus === "published"
+      ) {
+        return;
+      }
+
+      const linked = await transaction
+        .select({ status: mediaAssets.status })
+        .from(postMedia)
+        .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
+        .where(eq(postMedia.postId, postId));
+      if (linked.some((asset) => asset.status === "failed")) {
+        await transaction
+          .update(posts)
+          .set({
+            publicationStatus: "failed",
+            publicationError: "部分照片处理失败，请重试。",
+          })
+          .where(eq(posts.id, postId));
+      } else if (
+        linked.length > 0 &&
+        linked.every((asset) => asset.status === "ready")
+      ) {
+        await transaction
+          .update(posts)
+          .set({
+            publicationStatus: "published",
+            publicationError: null,
+            publishedAt: new Date(),
+          })
+          .where(eq(posts.id, postId));
+      }
+    });
   }
 }
 
@@ -536,6 +575,49 @@ export async function maintainLocalMedia(now = new Date()) {
     }
   }
 
+  const staleVerifiedUploads = await db
+    .select({ mediaId: mediaUploadSessions.mediaId })
+    .from(mediaUploadSessions)
+    .innerJoin(
+      mediaAssets,
+      eq(mediaUploadSessions.mediaId, mediaAssets.id),
+    )
+    .where(
+      and(
+        eq(mediaUploadSessions.status, "verified"),
+        lt(mediaUploadSessions.expiresAt, now),
+        isNull(mediaAssets.contentCommittedAt),
+        notExists(
+          db
+            .select({ id: postMedia.mediaId })
+            .from(postMedia)
+            .where(eq(postMedia.mediaId, mediaUploadSessions.mediaId)),
+        ),
+        notExists(
+          db
+            .select({ id: draftMedia.mediaId })
+            .from(draftMedia)
+            .where(eq(draftMedia.mediaId, mediaUploadSessions.mediaId)),
+        ),
+        notExists(
+          db
+            .select({ id: circleExitSnapshotMedia.mediaId })
+            .from(circleExitSnapshotMedia)
+            .where(
+              eq(
+                circleExitSnapshotMedia.mediaId,
+                mediaUploadSessions.mediaId,
+              ),
+            ),
+        ),
+      ),
+    )
+    .limit(100);
+  let removedOrphans = 0;
+  for (const upload of staleVerifiedUploads) {
+    if (await deleteMediaAsset(upload.mediaId)) removedOrphans += 1;
+  }
+
   const legacy = await db
     .select({ mediaId: mediaAssets.id })
     .from(mediaAssets)
@@ -550,6 +632,7 @@ export async function maintainLocalMedia(now = new Date()) {
   return {
     resumed: queued.length,
     expired: expired.length,
+    removedOrphans,
     backfilled,
   };
 }

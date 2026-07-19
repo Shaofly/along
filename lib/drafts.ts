@@ -1,13 +1,37 @@
 import "server-only";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 
 import { db } from "@/db";
-import { draftMedia, drafts, draftViewers, mediaAssets, postMedia } from "@/db/schema";
+import {
+  circleMemberRelations,
+  circles,
+  draftMedia,
+  drafts,
+  draftViewers,
+  mediaAssets,
+  postMedia,
+} from "@/db/schema";
 import type { HomeDraft } from "@/lib/content-types";
 import { deleteMediaAsset } from "@/lib/media/service";
 
 export async function getLatestDraft(authorId: string): Promise<HomeDraft | null> {
+  const activeCircleIds = db
+    .select({ circleId: circleMemberRelations.circleId })
+    .from(circleMemberRelations)
+    .innerJoin(
+      circles,
+      and(
+        eq(circleMemberRelations.circleId, circles.id),
+        eq(circles.status, "active"),
+      ),
+    )
+    .where(
+      and(
+        eq(circleMemberRelations.userId, authorId),
+        isNotNull(circleMemberRelations.activePeriodId),
+      ),
+    );
   const [draft] = await db
     .select({
       id: drafts.id,
@@ -18,7 +42,15 @@ export async function getLatestDraft(authorId: string): Promise<HomeDraft | null
       updatedAt: drafts.updatedAt,
     })
     .from(drafts)
-    .where(eq(drafts.authorId, authorId))
+    .where(
+      and(
+        eq(drafts.authorId, authorId),
+        or(
+          isNull(drafts.circleId),
+          inArray(drafts.circleId, activeCircleIds),
+        ),
+      ),
+    )
     .orderBy(desc(drafts.updatedAt))
     .limit(1);
 

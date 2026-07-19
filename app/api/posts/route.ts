@@ -17,7 +17,10 @@ import {
   postViewers,
 } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { getActiveCircleMembership } from "@/lib/circles";
+import {
+  assertActiveCircleMutation,
+  getActiveCircleMembership,
+} from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
 
 const createPostSchema = z.object({
@@ -143,8 +146,31 @@ export async function POST(request: Request) {
     ? "publishing" as const
     : "published" as const;
   const now = new Date();
-  await db.transaction(async (transaction) => {
-    await transaction.insert(posts).values({
+  try {
+    await db.transaction(async (transaction) => {
+      if (circleId) {
+        await assertActiveCircleMutation(
+          transaction,
+          session.user.id,
+          circleId,
+        );
+        const currentMembers = await transaction
+          .select({ userId: circleMemberRelations.userId })
+          .from(circleMemberRelations)
+          .where(
+            and(
+              eq(circleMemberRelations.circleId, circleId),
+              isNotNull(circleMemberRelations.activePeriodId),
+            ),
+          );
+        const currentMemberIds = new Set(
+          currentMembers.map((member) => member.userId),
+        );
+        if (!participantIds.every((id) => currentMemberIds.has(id))) {
+          throw new Error("参与者必须是当前圈子成员。");
+        }
+      }
+      await transaction.insert(posts).values({
       id,
       authorId: session.user.id,
       circleId,
@@ -154,35 +180,44 @@ export async function POST(request: Request) {
       publicationStatus,
       publishedAt: publicationStatus === "published" ? now : null,
     });
-    if (!circleId && parsed.data.visibility === "selected") {
-      await transaction.insert(postViewers).values(
+      if (!circleId && parsed.data.visibility === "selected") {
+        await transaction.insert(postViewers).values(
         viewerIds.map((userId) => ({ postId: id, userId })),
-      );
-    }
-    if (circleId) {
-      await transaction.insert(postParticipants).values(
+        );
+      }
+      if (circleId) {
+        await transaction.insert(postParticipants).values(
         participantIds.map((userId) => ({
           postId: id,
           userId,
           addedById: session.user.id,
         })),
-      );
-    }
-    if (mediaIds.length > 0) {
-      await transaction.insert(postMedia).values(
+        );
+      }
+      if (mediaIds.length > 0) {
+        await transaction.insert(postMedia).values(
         mediaIds.map((mediaId, position) => ({ postId: id, mediaId, position })),
-      );
-    }
-    if (circleId) {
-      await transaction
+        );
+      }
+      if (circleId) {
+        await transaction
         .update(circles)
         .set({ updatedAt: new Date() })
         .where(eq(circles.id, circleId));
-    }
-    if (draftId) {
-      await transaction.delete(drafts).where(eq(drafts.id, draftId));
-    }
-  });
+      }
+      if (draftId) {
+        await transaction.delete(drafts).where(eq(drafts.id, draftId));
+      }
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "圈子状态已经发生变化。",
+      },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({ ok: true, id, publicationStatus });
 }

@@ -15,6 +15,16 @@ import { CircleReadMarker } from "./CircleReadMarker";
 
 export const dynamic = "force-dynamic";
 
+function deletionLabel(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 export default async function CirclePage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/");
@@ -37,7 +47,7 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
       {circle.isActive ? <CircleReadMarker circleId={circle.id} /> : null}
       <header className="circle-detail-header">
         <Link href="/circles" aria-label="返回圈子列表">←</Link>
-        <div><span>{circle.status === "forming" ? "等待成员" : circle.isActive ? "共同生活册" : "历史档案"}</span><strong>{circle.name}</strong></div>
+        <div><span>{circle.isActive ? "共同生活册" : circle.status === "frozen" ? "冻结档案" : "历史档案"}</span><strong>{circle.name}</strong></div>
         <Link href={`/circles/${circle.id}/members`}>成员</Link>
       </header>
 
@@ -60,9 +70,7 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
             </div>
           </section>
 
-          {circle.status === "forming" ? (
-            <div className="circle-state-note"><strong>正在等第一位朋友加入</strong><p>至少一位受邀朋友接受后，这里才会开始发布共同记录。</p></div>
-          ) : circle.isActive ? (
+          {circle.isActive ? (
             <CircleComposer
               circleId={circle.id}
               circleName={circle.name}
@@ -75,8 +83,19 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
             />
           ) : (
             <div className="circle-state-note">
-              <strong>这是一份只读的退出档案</strong>
-              <p>这里冻结了你退出时有权查看的最新内容；圈子之后的变化不会继续写进这份档案。</p>
+              <strong>
+                {circle.status === "frozen"
+                  ? "圈子已冻结"
+                  : "这是一份只读的退出档案"}
+              </strong>
+              <p>
+                {circle.status === "frozen" && circle.deleteAt
+                  ? `所有人的历史记录将于 ${deletionLabel(circle.deleteAt)} 彻底删除；恢复后会取消本轮倒计时。`
+                  : "这里冻结了你退出时有权查看的最新内容；圈子之后的变化不会继续写进这份档案。"}
+              </p>
+              {circle.canRestore ? (
+                <Link href={`/circles/${circle.id}/members`}>前往恢复圈子</Link>
+              ) : null}
             </div>
           )}
 

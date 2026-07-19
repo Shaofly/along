@@ -6,7 +6,10 @@ import { z } from "zod";
 import { db } from "@/db";
 import { circleEvents, circleMembershipPeriods } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { getActiveCircleMembership } from "@/lib/circles";
+import {
+  assertActiveCircleMutation,
+  getActiveCircleMembership,
+} from "@/lib/circles";
 
 const nicknameSchema = z.object({
   nickname: z.string().trim().max(40, "圈子昵称不能超过 40 个字"),
@@ -35,18 +38,36 @@ export async function PATCH(
     );
   }
 
-  await db
-    .update(circleMembershipPeriods)
-    .set({ circleNickname: parsed.data.nickname || null })
-    .where(eq(circleMembershipPeriods.id, membership.id));
-
-  await db.insert(circleEvents).values({
-    id: crypto.randomUUID(),
-    circleId,
-    actorId: session.user.id,
-    type: "member_nickname_changed",
-    message: parsed.data.nickname ? `将圈子昵称改成了“${parsed.data.nickname}”。` : "清除了自己的圈子昵称。",
-  });
+  try {
+    await db.transaction(async (transaction) => {
+      await assertActiveCircleMutation(
+        transaction,
+        session.user.id,
+        circleId,
+      );
+      await transaction
+        .update(circleMembershipPeriods)
+        .set({ circleNickname: parsed.data.nickname || null })
+        .where(eq(circleMembershipPeriods.id, membership.id));
+      await transaction.insert(circleEvents).values({
+        id: crypto.randomUUID(),
+        circleId,
+        actorId: session.user.id,
+        type: "member_nickname_changed",
+        message: parsed.data.nickname
+          ? `将圈子昵称改成了“${parsed.data.nickname}”。`
+          : "清除了自己的圈子昵称。",
+      });
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "圈子状态已经发生变化。",
+      },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

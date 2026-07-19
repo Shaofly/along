@@ -111,6 +111,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
           }))}
           viewerIsActive={circle.isActive}
           viewerHasArchive={circle.isArchived}
+          canRestore={circle.canRestore}
         />
       </div>
     </AppShell>

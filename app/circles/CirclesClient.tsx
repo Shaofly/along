@@ -7,23 +7,49 @@ import { useRouter } from "next/navigation";
 import type { CircleSummary, FriendSummary } from "@/lib/content-types";
 
 type CircleAction = {
-  proposalId: string;
-  circleId: string;
+  actionId: string;
+  actionType: "creation" | "proposal";
+  circleId?: string;
   circleName: string;
   candidateName: string;
-  kind: "initial" | "add" | "rejoin";
+  kind: "creation" | "add" | "rejoin";
   allowHistory: boolean;
   expiresAt: string;
   role: "candidate" | "approver";
 };
 
+type CircleCreationRequest = {
+  id: string;
+  name: string;
+  description: string;
+  status: "pending" | "failed";
+  expiresAt: string;
+  resolvedAt: string | null;
+  invitees: Array<{
+    id: string;
+    name: string;
+    status: "pending" | "accepted" | "declined" | "expired";
+  }>;
+};
+
+function deadlineLabel(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 export function CirclesClient({
   circles,
   actions,
+  creationRequests,
   friends,
 }: {
   circles: CircleSummary[];
   actions: CircleAction[];
+  creationRequests: CircleCreationRequest[];
   friends: FriendSummary[];
 }) {
   const router = useRouter();
@@ -46,19 +72,25 @@ export function CirclesClient({
         invitedUserIds: selectedFriends,
       }),
     });
-    const result = (await response.json()) as { circleId?: string; error?: string };
+    const result = (await response.json()) as { requestId?: string; error?: string };
     setPending(false);
-    if (!response.ok || !result.circleId) {
+    if (!response.ok || !result.requestId) {
       setError(result.error ?? "创建圈子失败。");
       return;
     }
-    router.push(`/circles/${result.circleId}`);
+    setShowCreate(false);
+    setSelectedFriends([]);
+    router.refresh();
   }
 
-  async function respond(proposalId: string, decision: "accept" | "decline") {
+  async function respond(action: CircleAction, decision: "accept" | "decline") {
     setPending(true);
     setError("");
-    const response = await fetch(`/api/circles/proposals/${proposalId}/respond`, {
+    const endpoint =
+      action.actionType === "creation"
+        ? `/api/circles/creation-requests/${action.actionId}/respond`
+        : `/api/circles/proposals/${action.actionId}/respond`;
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ decision }),
@@ -72,25 +104,97 @@ export function CirclesClient({
     router.refresh();
   }
 
+  async function acknowledgeCreationResult(requestId: string) {
+    setPending(true);
+    setError("");
+    const response = await fetch(
+      `/api/circles/creation-requests/${requestId}/acknowledge`,
+      { method: "POST" },
+    );
+    const result = (await response.json()) as { error?: string };
+    setPending(false);
+    if (!response.ok) {
+      setError(result.error ?? "确认结果失败。");
+      return;
+    }
+    router.refresh();
+  }
+
   const active = circles.filter((circle) => circle.isActive);
   const historical = circles.filter((circle) => !circle.isActive);
 
   return (
     <>
+      {creationRequests.length ? (
+        <section className="circle-actions" aria-labelledby="circle-creation-title">
+          <p className="eyebrow">建立进度</p>
+          <h2 id="circle-creation-title">等待大家分别回应</h2>
+          <div>
+            {creationRequests.map((request) => (
+              <article key={request.id}>
+                <div>
+                  <strong>{request.name}</strong>
+                  {request.status === "pending" ? (
+                    <>
+                      <p>
+                        所有人接受、拒绝或到期后统一结算；至少一人接受才会建立圈子。
+                        截止时间：{deadlineLabel(request.expiresAt)}。
+                      </p>
+                      <p>
+                        {request.invitees
+                          .map((invitee) => {
+                            const status =
+                              invitee.status === "accepted"
+                                ? "已接受"
+                                : invitee.status === "declined"
+                                  ? "未接受"
+                                  : invitee.status === "expired"
+                                    ? "已到期"
+                                    : "等待中";
+                            return `${invitee.name}：${status}`;
+                          })
+                          .join(" · ")}
+                      </p>
+                    </>
+                  ) : (
+                    <p>24 小时内没有朋友接受，本次圈子没有建立。</p>
+                  )}
+                </div>
+                {request.status === "failed" ? (
+                  <div className="circle-action-buttons">
+                    <button
+                      disabled={pending}
+                      onClick={() => acknowledgeCreationResult(request.id)}
+                      type="button"
+                    >
+                      知道了
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {actions.length > 0 ? (
         <section className="circle-actions" aria-labelledby="circle-actions-title">
           <p className="eyebrow">等你回应</p>
           <h2 id="circle-actions-title">有些关系，需要每个人点头</h2>
           <div>
             {actions.map((action) => (
-              <article key={action.proposalId}>
+              <article key={`${action.actionType}-${action.actionId}`}>
                 <div>
                   <strong>{action.circleName}</strong>
                   <p>
                     {action.role === "candidate"
-                      ? action.kind === "rejoin" ? "成员们已经同意，确认后重新加入。" : "朋友邀请你加入这个小圈子。"
+                      ? action.kind === "creation"
+                        ? "朋友邀请你共同建立一个小圈子；所有人回应后，只要有人接受就会正式建立。"
+                        : action.kind === "rejoin" ? "成员们已经同意，确认后重新加入。" : "朋友邀请你加入这个小圈子。"
                       : `是否同意 ${action.candidateName} 加入？`}
-                    {action.kind === "rejoin"
+                    {action.kind === "creation"
+                      ? " 邀请在 24 小时内有效。"
+                      : action.kind === "rejoin"
                       ? " 重新加入后会恢复原本获准的历史范围。"
                       : action.allowHistory
                         ? " 同意后可以查看加入前的记录。"
@@ -98,8 +202,8 @@ export function CirclesClient({
                   </p>
                 </div>
                 <div className="circle-action-buttons">
-                  <button disabled={pending} onClick={() => respond(action.proposalId, "decline")} type="button">暂不加入</button>
-                  <button className="primary" disabled={pending} onClick={() => respond(action.proposalId, "accept")} type="button">同意</button>
+                  <button disabled={pending} onClick={() => respond(action, "decline")} type="button">暂不加入</button>
+                  <button className="primary" disabled={pending} onClick={() => respond(action, "accept")} type="button">同意</button>
                 </div>
               </article>
             ))}
@@ -149,7 +253,7 @@ export function CirclesClient({
             </fieldset>
             {error ? <p className="composer-error">{error}</p> : null}
             <button className="publish-button" disabled={pending || selectedFriends.length === 0} type="submit">
-              {pending ? "正在建立" : "发出三天内有效的邀请"}
+              {pending ? "正在发出" : "发出 24 小时内有效的邀请"}
             </button>
           </form>
         ) : null}
@@ -160,7 +264,7 @@ export function CirclesClient({
             <Link href={`/circles/${circle.id}`} key={circle.id}>
               <div className="circle-color-block" aria-hidden="true">{circle.name.slice(0, 1)}</div>
               <div className="circle-list-copy">
-                <span>{circle.status === "forming" ? "等待朋友加入" : `${circle.members.length} 位成员`}</span>
+                <span>{`${circle.members.length} 位成员`}</span>
                 <h2>{circle.name}</h2>
                 <p>{circle.description || "一些普通日子，慢慢在这里有了共同的形状。"}</p>
               </div>
@@ -184,7 +288,11 @@ export function CirclesClient({
           {historical.map((circle) => (
             <Link href={`/circles/${circle.id}`} key={circle.id}>
               <strong>{circle.name}</strong>
-              <span>过去的记录仍可只读查看</span>
+              <span>
+                {circle.status === "frozen" && circle.deleteAt
+                  ? `圈子已冻结，将于 ${deadlineLabel(circle.deleteAt)} 彻底删除`
+                  : "过去的记录仍可只读查看"}
+              </span>
             </Link>
           ))}
         </section>

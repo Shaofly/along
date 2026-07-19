@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { mediaAssets } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import { canAccessMedia } from "@/lib/media/access";
 
 export async function GET(
   _request: Request,
@@ -12,7 +13,13 @@ export async function GET(
 ) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
-    return NextResponse.json({ error: "请先登录。" }, { status: 401 });
+    return NextResponse.json(
+      { error: "请先登录。" },
+      {
+        status: 401,
+        headers: { "cache-control": "private, no-store" },
+      },
+    );
   }
   const { id } = await context.params;
   const [asset] = await db
@@ -25,13 +32,25 @@ export async function GET(
     .from(mediaAssets)
     .where(eq(mediaAssets.id, id))
     .limit(1);
-  if (!asset || asset.ownerId !== session.user.id) {
-    return NextResponse.json({ error: "图片不存在。" }, { status: 404 });
+  if (
+    !asset ||
+    asset.ownerId !== session.user.id ||
+    !(await canAccessMedia(session.user.id, id))
+  ) {
+    return NextResponse.json(
+      { error: "图片不存在。" },
+      {
+        status: 404,
+        headers: { "cache-control": "private, no-store" },
+      },
+    );
   }
-  return NextResponse.json({
-    status: asset.status,
-    failureCode: asset.failureCode,
-    readyAt: asset.readyAt?.toISOString() ?? null,
-  });
+  return NextResponse.json(
+    {
+      status: asset.status,
+      failureCode: asset.failureCode,
+      readyAt: asset.readyAt?.toISOString() ?? null,
+    },
+    { headers: { "cache-control": "private, no-store" } },
+  );
 }
-

@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element -- Private avatar URLs are authenticated and not known to Next Image. */
-
 import { Check, Pencil, Search, UserPlus, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import Link from "next/link";
@@ -10,6 +8,7 @@ import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
 import { DissolveInput } from "@/app/components/DissolveField";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import type { FriendSummary } from "@/lib/content-types";
 
 export function FriendsClient({
@@ -94,7 +93,7 @@ export function FriendsClient({
               <motion.article className="friend-directory-row" key={friend.id} layout={!reducedMotion}>
                 <Link className="friend-directory-main" href={`/profile/${friend.id}`}>
                   <span className="friend-avatar">
-                    {friend.image ? <img alt="" src={friend.image} /> : friend.displayName.slice(0, 1)}
+                    <UserAvatar image={friend.image} name={friend.displayName} />
                   </span>
                   <span>
                     <strong>{friend.displayName}</strong>

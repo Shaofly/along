@@ -8,6 +8,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   or,
 } from "drizzle-orm";
@@ -25,15 +26,29 @@ import {
   posts,
   postViewers,
   user,
+  userProfileAppearance,
+  userProfileDetails,
+  userProfileDetailViewers,
 } from "@/db/schema";
-import type { FeedPost } from "@/lib/content-types";
+import type {
+  FeedPost,
+  ProfileViewMode,
+} from "@/lib/content-types";
 import { getFriends } from "@/lib/invitations";
+import { getProfileAudience } from "@/lib/profile-permissions";
+
+export type { ProfileViewMode } from "@/lib/content-types";
 
 type VisiblePostOptions = {
   authorId?: string;
   profileId?: string;
+  profileView?: ProfileViewMode;
   circleId?: string;
   postId?: string;
+  before?: {
+    createdAt: Date;
+    id: string;
+  };
   limit?: number;
 };
 
@@ -120,17 +135,24 @@ export async function getVisiblePosts(
           isNotNull(circleMemberRelations.activePeriodId),
         ),
       );
-    profileCondition = or(
-      and(
-        isNull(posts.circleId),
-        eq(posts.authorId, options.profileId),
-      ),
-      and(
-        isNotNull(posts.circleId),
-        inArray(posts.id, participatedPosts),
-        inArray(posts.circleId, profileActiveCircles),
-      ),
+    const personalProfileCondition = and(
+      isNull(posts.circleId),
+      eq(posts.authorId, options.profileId),
+      options.profileView === "private"
+        ? eq(posts.visibility, "private")
+        : undefined,
     );
+    const sharedProfileCondition = and(
+      isNotNull(posts.circleId),
+      inArray(posts.id, participatedPosts),
+      inArray(posts.circleId, profileActiveCircles),
+    );
+    profileCondition = options.profileView === "personal" ||
+      options.profileView === "private"
+      ? personalProfileCondition
+      : options.profileView === "shared"
+        ? sharedProfileCondition
+        : or(personalProfileCondition, sharedProfileCondition);
   }
 
   const rows = await db
@@ -147,12 +169,17 @@ export async function getVisiblePosts(
       authorId: user.id,
       authorName: user.name,
       authorImage: user.image,
+      authorAvatarMediaId: userProfileAppearance.avatarMediaId,
       circleId: circles.id,
       circleName: circles.name,
       circleStatus: circles.status,
     })
     .from(posts)
     .innerJoin(user, eq(posts.authorId, user.id))
+    .leftJoin(
+      userProfileAppearance,
+      eq(userProfileAppearance.userId, user.id),
+    )
     .leftJoin(circles, eq(posts.circleId, circles.id))
     .where(
       and(
@@ -165,9 +192,18 @@ export async function getVisiblePosts(
         options.authorId ? eq(posts.authorId, options.authorId) : undefined,
         options.circleId ? eq(posts.circleId, options.circleId) : undefined,
         options.postId ? eq(posts.id, options.postId) : undefined,
+        options.before
+          ? or(
+              lt(posts.createdAt, options.before.createdAt),
+              and(
+                eq(posts.createdAt, options.before.createdAt),
+                lt(posts.id, options.before.id),
+              ),
+            )
+          : undefined,
       ),
     )
-    .orderBy(desc(posts.createdAt))
+    .orderBy(desc(posts.createdAt), desc(posts.id))
     .limit(Math.min(options.limit ?? 30, 50));
 
   if (rows.length === 0) return [];
@@ -278,6 +314,14 @@ export async function getVisiblePosts(
 
   return rows.map((row) => {
     const isCirclePost = Boolean(row.circleId);
+    const canShowAuthorAvatar = row.authorId === viewerId ||
+      friendIds.includes(row.authorId) ||
+      Boolean(
+        row.circleId &&
+        (membersByCircle.get(row.circleId) ?? []).some(
+          (member) => member.id === row.authorId,
+        ),
+      );
     const canManageCirclePost = Boolean(
       row.circleId &&
       activeCircleIds.has(row.circleId) &&
@@ -297,7 +341,11 @@ export async function getVisiblePosts(
       author: {
         id: row.authorId,
         name: row.authorName,
-        image: row.authorImage,
+        image: canShowAuthorAvatar
+          ? row.authorAvatarMediaId
+            ? `/api/media/${row.authorAvatarMediaId}/thumbnail`
+            : row.authorImage
+          : null,
       },
       circle:
         row.circleId && row.circleName
@@ -366,7 +414,6 @@ export async function getCircleArchivePosts(
       lastEditedById: circleExitSnapshotPosts.lastEditedById,
       authorId: user.id,
       authorName: user.name,
-      authorImage: user.image,
     })
     .from(circleExitSnapshotPosts)
     .innerJoin(user, eq(circleExitSnapshotPosts.authorId, user.id))
@@ -419,7 +466,7 @@ export async function getCircleArchivePosts(
     author: {
       id: row.authorId,
       name: row.authorName,
-      image: row.authorImage,
+      image: null,
     },
     circle: { id: circleId, name: archive.name },
     lastEditor: row.lastEditedById
@@ -495,7 +542,85 @@ export async function canViewPost(viewerId: string, postId: string) {
   return friends.some((friend) => friend.id === post.authorId);
 }
 
-export async function getProfileForViewer(viewerId: string, profileId: string) {
+function encodeProfileCursor(post: FeedPost) {
+  return Buffer.from(
+    JSON.stringify({ createdAt: post.createdAt, id: post.id }),
+  ).toString("base64url");
+}
+
+function decodeProfileCursor(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    ) as { createdAt?: unknown; id?: unknown };
+    if (
+      typeof parsed.createdAt !== "string" ||
+      typeof parsed.id !== "string"
+    ) {
+      return null;
+    }
+    const createdAt = new Date(parsed.createdAt);
+    if (!Number.isFinite(createdAt.getTime()) || !parsed.id) return null;
+    return { createdAt, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+async function getProfilePostPage(
+  viewerId: string,
+  profileId: string,
+  options: {
+    cursor?: string | null;
+    limit?: number;
+    view?: ProfileViewMode;
+  },
+) {
+  const limit = Math.min(Math.max(options.limit ?? 12, 1), 24);
+  const rows = await getVisiblePosts(viewerId, {
+    profileId,
+    profileView: options.view ?? "all",
+    before: decodeProfileCursor(options.cursor) ?? undefined,
+    limit: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const posts = rows.slice(0, limit);
+  return {
+    posts,
+    nextCursor:
+      hasMore && posts.length ? encodeProfileCursor(posts.at(-1)!) : null,
+  };
+}
+
+export async function getProfilePostsForViewer(
+  viewerId: string,
+  profileId: string,
+  options: {
+    cursor?: string | null;
+    limit?: number;
+    view?: ProfileViewMode;
+  } = {},
+) {
+  const audience = await getProfileAudience(viewerId, profileId);
+  if (
+    !audience ||
+    (options.view === "private" && audience !== "self")
+  ) {
+    return null;
+  }
+  return getProfilePostPage(viewerId, profileId, options);
+}
+
+export async function getProfileForViewer(
+  viewerId: string,
+  profileId: string,
+  options: {
+    cursor?: string | null;
+    limit?: number;
+    view?: ProfileViewMode;
+  } = {},
+) {
   const [profile] = await db
     .select({
       id: user.id,
@@ -504,51 +629,152 @@ export async function getProfileForViewer(viewerId: string, profileId: string) {
       nickname: user.nickname,
       image: user.image,
       bio: user.bio,
+      email: user.email,
       createdAt: user.createdAt,
+      avatarMediaId: userProfileAppearance.avatarMediaId,
+      coverMediaId: userProfileAppearance.coverMediaId,
+      theme: userProfileAppearance.theme,
+      avatarFocusX: userProfileAppearance.avatarFocusX,
+      avatarFocusY: userProfileAppearance.avatarFocusY,
+      coverFocusX: userProfileAppearance.coverFocusX,
+      coverFocusY: userProfileAppearance.coverFocusY,
+      profileDetailsUserId: userProfileDetails.userId,
+      gender: userProfileDetails.gender,
+      residence: userProfileDetails.residence,
+      phone: userProfileDetails.phone,
+      contactEmail: userProfileDetails.contactEmail,
+      school: userProfileDetails.school,
+      profileInfoVisibility: userProfileDetails.visibility,
+      lastSharedVisibility: userProfileDetails.lastSharedVisibility,
     })
     .from(user)
+    .leftJoin(
+      userProfileAppearance,
+      eq(userProfileAppearance.userId, user.id),
+    )
+    .leftJoin(
+      userProfileDetails,
+      eq(userProfileDetails.userId, user.id),
+    )
     .where(eq(user.id, profileId))
     .limit(1);
   if (!profile) return null;
 
-  const friends = await getFriends(viewerId);
-  const isSelf = viewerId === profileId;
-  let hasCircleRelationship = false;
-  if (!isSelf && !friends.some((friend) => friend.id === profileId)) {
-    const [viewerRelations, profileRelations] = await Promise.all([
-      db
-        .select({ circleId: circleMemberRelations.circleId })
-        .from(circleMemberRelations)
-        .where(
-          and(
-            eq(circleMemberRelations.userId, viewerId),
-            isNotNull(circleMemberRelations.activePeriodId),
-          ),
+  const audience = await getProfileAudience(viewerId, profileId);
+  if (!audience) return null;
+  const isSelf = audience === "self";
+  const view =
+    options.view === "private" && !isSelf
+      ? "all"
+      : options.view ?? "all";
+  const page = await getProfilePostPage(viewerId, profileId, {
+    ...options,
+    view,
+  });
+  const theme = profile.theme ?? "sage";
+  const avatarFocusX = profile.avatarFocusX ?? 5000;
+  const avatarFocusY = profile.avatarFocusY ?? 5000;
+  const coverFocusX = profile.coverFocusX ?? 5000;
+  const coverFocusY = profile.coverFocusY ?? 5000;
+  const coverIsVisible = audience === "self" || audience === "friend";
+  const profileInfoVisibility = profile.profileInfoVisibility ?? "private";
+  let selectedFriendIds: string[] = [];
+  let canViewPersonalInfo =
+    isSelf || profileInfoVisibility === "all";
+
+  if (isSelf) {
+    selectedFriendIds = (
+      await db
+        .select({ viewerId: userProfileDetailViewers.viewerId })
+        .from(userProfileDetailViewers)
+        .where(eq(userProfileDetailViewers.ownerId, profileId))
+    ).map((row) => row.viewerId);
+  } else if (
+    profile.profileDetailsUserId &&
+    profileInfoVisibility === "selected" &&
+    audience === "friend"
+  ) {
+    const [selectedViewer] = await db
+      .select({ viewerId: userProfileDetailViewers.viewerId })
+      .from(userProfileDetailViewers)
+      .where(
+        and(
+          eq(userProfileDetailViewers.ownerId, profileId),
+          eq(userProfileDetailViewers.viewerId, viewerId),
         ),
-      db
-        .select({ circleId: circleMemberRelations.circleId })
-        .from(circleMemberRelations)
-        .where(
-          and(
-            eq(circleMemberRelations.userId, profileId),
-            isNotNull(circleMemberRelations.activePeriodId),
-          ),
-        ),
-    ]);
-    const profileCircleIds = new Set(
-      profileRelations.map((relation) => relation.circleId),
-    );
-    hasCircleRelationship = viewerRelations.some((relation) =>
-      profileCircleIds.has(relation.circleId),
-    );
-    if (!hasCircleRelationship) return null;
+      )
+      .limit(1);
+    canViewPersonalInfo = Boolean(selectedViewer);
   }
 
+  const personalInfo = isSelf
+    ? {
+        gender: profile.gender,
+        residence: profile.residence,
+        phone: profile.phone,
+        contactEmail: profile.profileDetailsUserId
+          ? profile.contactEmail
+          : profile.email,
+        school: profile.school,
+      }
+    : canViewPersonalInfo && profile.profileDetailsUserId
+      ? {
+          gender: profile.gender,
+          residence: profile.residence,
+          phone: profile.phone,
+          contactEmail: profile.contactEmail,
+          school: profile.school,
+        }
+      : null;
+
   return {
-    ...profile,
+    id: profile.id,
+    name: profile.name,
+    realName: profile.realName,
+    nickname: profile.nickname,
+    image: profile.avatarMediaId
+      ? `/api/media/${profile.avatarMediaId}/thumbnail`
+      : profile.image,
+    legacyImage: profile.image,
+    bio: profile.bio,
+    email: isSelf ? profile.email : null,
+    personalInfo,
+    personalInfoSettings: isSelf
+      ? {
+          visibility: profileInfoVisibility,
+          lastSharedVisibility:
+            profile.lastSharedVisibility === "all" ||
+            profile.lastSharedVisibility === "selected"
+              ? profile.lastSharedVisibility
+              : null,
+          selectedFriendIds,
+        }
+      : null,
+    theme,
+    avatar: {
+      mediaId: profile.avatarMediaId,
+      src: profile.avatarMediaId
+        ? `/api/media/${profile.avatarMediaId}/preview`
+        : profile.image,
+      focusX: avatarFocusX,
+      focusY: avatarFocusY,
+    },
+    cover: coverIsVisible
+      ? {
+          mediaId: profile.coverMediaId,
+          src: profile.coverMediaId
+            ? `/api/media/${profile.coverMediaId}/preview`
+            : null,
+          focusX: coverFocusX,
+          focusY: coverFocusY,
+        }
+      : null,
     createdAt: profile.createdAt.toISOString(),
     isSelf,
-    isLimitedByCircle: !isSelf && hasCircleRelationship,
-    posts: await getVisiblePosts(viewerId, { profileId, limit: 40 }),
+    audience,
+    isLimitedByCircle: audience === "circle",
+    posts: page.posts,
+    nextCursor: page.nextCursor,
+    view,
   };
 }

@@ -277,6 +277,305 @@ try {
     cookieJ,
     cookieK,
   ] = await Promise.all(users.map(login));
+  const profileAvatar = await upload(cookieB, { r: 194, g: 215, b: 198 });
+  const profileCover = await upload(cookieB, { r: 220, g: 229, b: 235 });
+  const profileMediaUpdate = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      theme: "mist",
+      avatar: {
+        mediaId: profileAvatar.id,
+        focusX: 4200,
+        focusY: 3800,
+      },
+      cover: {
+        mediaId: profileCover.id,
+        focusX: 6100,
+        focusY: 4700,
+      },
+    }),
+  });
+  await assertStatus(profileMediaUpdate, 200);
+  const committedProfileMedia = await pool.query(
+    `select id, content_committed_at
+       from media_assets
+      where id = any($1::text[])`,
+    [[profileAvatar.id, profileCover.id]],
+  );
+  assert.equal(committedProfileMedia.rowCount, 2);
+  assert(
+    committedProfileMedia.rows.every(
+      (asset) => asset.content_committed_at !== null,
+    ),
+  );
+  for (const mediaId of [profileAvatar.id, profileCover.id]) {
+    await assertStatus(
+      await api(`/api/media/${mediaId}/thumbnail`, {
+        headers: { cookie: cookieB },
+      }),
+      200,
+    );
+    await assertStatus(
+      await api(`/api/media/${mediaId}/thumbnail`, {
+        headers: { cookie: cookieA },
+      }),
+      200,
+    );
+    await assertStatus(
+      await api(`/api/media/${mediaId}/thumbnail`, {
+        headers: { cookie: cookieC },
+      }),
+      404,
+    );
+  }
+  const firstDirectPrivacyOff = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieC, "content-type": "application/json" },
+    body: JSON.stringify({ protected: false }),
+  });
+  await assertStatus(firstDirectPrivacyOff, 200);
+  assert.equal((await firstDirectPrivacyOff.json()).visibility, "all");
+  const restoreFirstPrivacyProtection = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieC, "content-type": "application/json" },
+    body: JSON.stringify({ protected: true }),
+  });
+  await assertStatus(restoreFirstPrivacyProtection, 200);
+  assert.equal(
+    (await restoreFirstPrivacyProtection.json()).visibility,
+    "private",
+  );
+  const profileInfoSecret = `profile-b-${suffix}@example.invalid`;
+  const [profileFriendOneId, profileFriendTwoId] = [
+    ids.get(users[1].email),
+    ids.get(users[2].email),
+  ].sort();
+  await pool.query(
+    `insert into friendships (id, user_one_id, user_two_id)
+     values ($1, $2, $3)`,
+    [randomUUID(), profileFriendOneId, profileFriendTwoId],
+  );
+  const updateVisibleProfileInfo = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      personalInfo: {
+        gender: "测试",
+        residence: "海外·东京",
+        phone: "+81 00 0000 0000",
+        contactEmail: profileInfoSecret,
+        school: "沿途测试学校",
+        visibility: "all",
+        selectedFriendIds: [],
+      },
+    }),
+  });
+  await assertStatus(updateVisibleProfileInfo, 200);
+  for (const cookie of [cookieA, cookieC]) {
+    const profileResponse = await api(
+      `/profile/${ids.get(users[1].email)}`,
+      { headers: { cookie } },
+    );
+    await assertStatus(profileResponse, 200);
+    const profileHtml = await profileResponse.text();
+    assert(profileHtml.includes(profileInfoSecret));
+    assert(!profileHtml.includes(users[1].email));
+  }
+
+  const updateSelectedProfileInfo = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      personalInfo: {
+        gender: "测试",
+        residence: "海外·东京",
+        phone: "+81 00 0000 0000",
+        contactEmail: profileInfoSecret,
+        school: "沿途测试学校",
+        visibility: "selected",
+        selectedFriendIds: [
+          ids.get(users[0].email),
+          ids.get(users[2].email),
+        ],
+      },
+    }),
+  });
+  await assertStatus(updateSelectedProfileInfo, 200);
+  const protectProfileInfo = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({ protected: true }),
+  });
+  await assertStatus(protectProfileInfo, 200);
+  const protectedFriendProfile = await api(
+    `/profile/${ids.get(users[1].email)}`,
+    { headers: { cookie: cookieA } },
+  );
+  await assertStatus(protectedFriendProfile, 200);
+  assert(!(await protectedFriendProfile.text()).includes(profileInfoSecret));
+  const keepExistingPrivateProfileScope = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      personalInfo: {
+        gender: "测试",
+        residence: "日本 · 东京",
+        phone: "+81 00 0000 0000",
+        contactEmail: profileInfoSecret,
+        school: "沿途测试学校",
+        visibility: "selected",
+        selectedFriendIds: [],
+      },
+    }),
+  });
+  await assertStatus(keepExistingPrivateProfileScope, 200);
+  const preservedPrivateScope = await pool.query(
+    `select visibility, last_shared_visibility
+       from user_profile_details
+      where user_id = $1`,
+    [ids.get(users[1].email)],
+  );
+  assert.equal(preservedPrivateScope.rows[0].visibility, "private");
+  assert.equal(
+    preservedPrivateScope.rows[0].last_shared_visibility,
+    "selected",
+  );
+  const preservedPrivateViewers = await pool.query(
+    `select count(*)::int as count
+       from user_profile_detail_viewers
+      where owner_id = $1`,
+    [ids.get(users[1].email)],
+  );
+  assert.equal(preservedPrivateViewers.rows[0].count, 2);
+  const restoreProfileInfo = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({ protected: false }),
+  });
+  await assertStatus(restoreProfileInfo, 200);
+  assert.equal((await restoreProfileInfo.json()).visibility, "selected");
+  const restoredFriendProfile = await api(
+    `/profile/${ids.get(users[1].email)}`,
+    { headers: { cookie: cookieA } },
+  );
+  await assertStatus(restoredFriendProfile, 200);
+  assert((await restoredFriendProfile.text()).includes(profileInfoSecret));
+
+  const normalizeEmptySelectedProfileInfo = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      personalInfo: {
+        gender: "测试",
+        residence: "日本·东京",
+        phone: "+81 00 0000 0000",
+        contactEmail: profileInfoSecret,
+        school: "沿途测试学校",
+        visibility: "selected",
+        selectedFriendIds: [],
+      },
+    }),
+  });
+  await assertStatus(normalizeEmptySelectedProfileInfo, 200);
+  const normalizedProfileInfo = await pool.query(
+    `select residence, visibility, last_shared_visibility
+       from user_profile_details
+      where user_id = $1`,
+    [ids.get(users[1].email)],
+  );
+  assert.equal(normalizedProfileInfo.rows[0].residence, "日本 · 东京");
+  assert.equal(normalizedProfileInfo.rows[0].visibility, "private");
+  assert.equal(normalizedProfileInfo.rows[0].last_shared_visibility, null);
+  const normalizedProfileViewers = await pool.query(
+    `select count(*)::int as count
+       from user_profile_detail_viewers
+      where owner_id = $1`,
+    [ids.get(users[1].email)],
+  );
+  assert.equal(normalizedProfileViewers.rows[0].count, 0);
+  const restoreAfterEmptySelection = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({ protected: false }),
+  });
+  await assertStatus(restoreAfterEmptySelection, 200);
+  assert.equal(
+    (await restoreAfterEmptySelection.json()).visibility,
+    "all",
+  );
+  const restoreSelectedProfileInfo = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      personalInfo: {
+        gender: "测试",
+        residence: "日本 · 东京",
+        phone: "+81 00 0000 0000",
+        contactEmail: profileInfoSecret,
+        school: "沿途测试学校",
+        visibility: "selected",
+        selectedFriendIds: [ids.get(users[0].email)],
+      },
+    }),
+  });
+  await assertStatus(restoreSelectedProfileInfo, 200);
+
+  await pool.query(
+    `delete from friendships
+      where user_one_id = $1 and user_two_id = $2`,
+    [profileFriendOneId, profileFriendTwoId],
+  );
+  const unrelatedProfile = await api(
+    `/profile/${ids.get(users[1].email)}`,
+    { headers: { cookie: cookieC } },
+  );
+  await assertStatus(unrelatedProfile, 404);
+  const removeProfileCover = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      theme: "mist",
+      avatar: {
+        mediaId: profileAvatar.id,
+        focusX: 4200,
+        focusY: 3800,
+      },
+      cover: {
+        mediaId: null,
+        focusX: 6100,
+        focusY: 4700,
+      },
+    }),
+  });
+  await assertStatus(removeProfileCover, 200);
+  await assertStatus(
+    await api(`/api/media/${profileCover.id}/thumbnail`, {
+      headers: { cookie: cookieB },
+    }),
+    404,
+  );
   const publicMedia = await upload(cookieA, { r: 194, g: 215, b: 198 });
   const temporaryMediaResponse = await api(
     `/api/media/${publicMedia.id}/thumbnail`,
@@ -1415,6 +1714,57 @@ try {
   assert(governanceCircleId);
   createdCircleIds.push(governanceCircleId);
 
+  const profileCircleCover = await upload(cookieB, {
+    r: 230,
+    g: 218,
+    b: 202,
+  });
+  const sharedCircleProfileUpdate = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieB, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[1].realName,
+      nickname: "测试乙",
+      bio: "用来验证资料媒体权限。",
+      theme: "apricot",
+      avatar: {
+        mediaId: profileAvatar.id,
+        focusX: 4200,
+        focusY: 3800,
+      },
+      cover: {
+        mediaId: profileCircleCover.id,
+        focusX: 5600,
+        focusY: 4400,
+      },
+    }),
+  });
+  await assertStatus(sharedCircleProfileUpdate, 200);
+  await assertStatus(
+    await api(`/api/media/${profileAvatar.id}/thumbnail`, {
+      headers: { cookie: cookieC },
+    }),
+    200,
+  );
+  await assertStatus(
+    await api(`/api/media/${profileCircleCover.id}/thumbnail`, {
+      headers: { cookie: cookieC },
+    }),
+    404,
+  );
+  await assertStatus(
+    await api(`/api/media/${profileCircleCover.id}/thumbnail`, {
+      headers: { cookie: cookieA },
+    }),
+    200,
+  );
+  const sharedCircleProfile = await api(
+    `/profile/${ids.get(users[1].email)}`,
+    { headers: { cookie: cookieC } },
+  );
+  await assertStatus(sharedCircleProfile, 200);
+  assert(!(await sharedCircleProfile.text()).includes(profileInfoSecret));
+
   const inviteD = await api(
     `/api/circles/${governanceCircleId}/proposals`,
     {
@@ -1459,6 +1809,18 @@ try {
     },
   );
   await assertStatus(governanceLeaveB, 200);
+  await assertStatus(
+    await api(`/api/media/${profileAvatar.id}/thumbnail`, {
+      headers: { cookie: cookieC },
+    }),
+    404,
+  );
+  await assertStatus(
+    await api(`/profile/${ids.get(users[1].email)}`, {
+      headers: { cookie: cookieC },
+    }),
+    404,
+  );
 
   const exitedApprovals = await pool.query(
     `select proposal_id
@@ -1771,7 +2133,7 @@ try {
   }
   createdPostIds.length = 0;
   console.log(
-    "Smoke test passed: auth, media safety and expired-orphan cleanup, permission-revalidated ETag caching, temporary and draft media boundaries, multi-draft listing, optimistic draft conflicts and conflict forking, owner revocation after archive deletion, personal visibility, participant revalidation, atomic edit conflicts, early-or-24-hour circle creation settlement, durable circle membership, frozen exit archives, activity-independent historical ordering, rejoin restoration, approval membership changes, direct sole-member invitations, serialized and database-constrained circle capacity, deferred database constraints, archive deletion, and cleanup.",
+    "Smoke test passed: auth, profile media commitment, profile information visibility and relationship permissions, media safety and expired-orphan cleanup, permission-revalidated ETag caching, temporary and draft media boundaries, multi-draft listing, optimistic draft conflicts and conflict forking, owner revocation after archive deletion, personal visibility, participant revalidation, atomic edit conflicts, early-or-24-hour circle creation settlement, durable circle membership, frozen exit archives, activity-independent historical ordering, rejoin restoration, approval membership changes, direct sole-member invitations, serialized and database-constrained circle capacity, deferred database constraints, archive deletion, and cleanup.",
   );
 } finally {
   const rows = await pool.query(
@@ -1798,6 +2160,10 @@ try {
     await pool.query(`delete from circles where created_by_id = any($1::text[])`, [userIds]);
     await pool.query(
       `delete from circle_creation_requests where creator_id = any($1::text[])`,
+      [userIds],
+    );
+    await pool.query(
+      `delete from user_profile_appearance where user_id = any($1::text[])`,
       [userIds],
     );
     await pool.query(`delete from media_assets where owner_id = any($1::text[])`, [userIds]);

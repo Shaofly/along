@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { AnimatedReveal } from "@/app/components/SegmentedControl";
 import { TextStateSwap } from "@/app/components/TextStateSwap";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import type { CircleSummary, FriendSummary } from "@/lib/content-types";
 
 type CircleAction = {
@@ -254,7 +255,7 @@ export function CirclesClient({
                     )}
                     type="checkbox"
                   />
-                  <span>{friend.name.slice(0, 1)}</span>
+                  <span><UserAvatar image={friend.image} name={friend.name} /></span>
                   {friend.name}
                 </label>
               )) : <p>先邀请朋友加入平台，再一起建立圈子。</p>}
@@ -278,7 +279,11 @@ export function CirclesClient({
                 <p>{circle.description || "一些普通日子，慢慢在这里有了共同的形状。"}</p>
               </div>
               <div className="circle-member-stack" aria-label={`${circle.members.length} 位当前成员`}>
-                {circle.members.slice(0, 4).map((member) => <span key={member.id}>{member.name.slice(0, 1)}</span>)}
+                {circle.members.slice(0, 4).map((member) => (
+                  <span key={member.id}>
+                    <UserAvatar image={member.image} name={member.name} />
+                  </span>
+                ))}
               </div>
             </Link>
           )) : (

@@ -1,12 +1,11 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element -- Profile images may use private or configured URLs. */
-
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useRef } from "react";
 
 import type { CircleSummary, FriendSummary } from "@/lib/content-types";
+import { UserAvatar } from "@/app/components/UserAvatar";
 
 export function SummaryListItem({
   className = "",
@@ -46,7 +45,7 @@ export function FriendSummaryItem({ friend }: { friend: FriendSummary }) {
       href={`/profile/${friend.id}`}
       leading={
         <span className="summary-friend-avatar">
-          {friend.image ? <img alt="" src={friend.image} /> : friend.displayName.slice(0, 1)}
+          <UserAvatar image={friend.image} name={friend.displayName} />
         </span>
       }
       title={title}
@@ -108,7 +107,7 @@ export function AvatarGroup({ members }: { members: CircleSummary["members"] }) 
           key={member.id}
           onMouseEnter={() => setShifts(index)}
         >
-          {member.image ? <img alt="" src={member.image} /> : member.name.slice(0, 1)}
+          <UserAvatar image={member.image} name={member.name} />
         </span>
       ))}
       {remaining ? <span aria-hidden="true" className="summary-member-avatar summary-member-more">+{remaining}</span> : null}

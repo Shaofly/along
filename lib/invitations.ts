@@ -16,6 +16,7 @@ import {
   invitations,
   invitationSponsors,
   user,
+  userProfileAppearance,
 } from "@/db/schema";
 
 const invitationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -187,10 +188,15 @@ export async function getFriends(userId: string) {
       nickname: user.nickname,
       email: user.email,
       image: user.image,
+      avatarMediaId: userProfileAppearance.avatarMediaId,
       bio: user.bio,
       remark: friendRemarks.remark,
     })
     .from(user)
+    .leftJoin(
+      userProfileAppearance,
+      eq(userProfileAppearance.userId, user.id),
+    )
     .leftJoin(
       friendRemarks,
       and(
@@ -202,6 +208,9 @@ export async function getFriends(userId: string) {
 
   return rows.map((friend) => ({
     ...friend,
+    image: friend.avatarMediaId
+      ? `/api/media/${friend.avatarMediaId}/thumbnail`
+      : friend.image,
     identityName: friend.nickname
       ? `${friend.nickname}（${friend.realName}）`
       : friend.realName,

@@ -35,6 +35,7 @@ import {
   postMedia,
   posts,
   user,
+  userProfileAppearance,
 } from "@/db/schema";
 import { deleteMediaAsset } from "@/lib/media/service";
 
@@ -476,6 +477,7 @@ export async function getCircleDashboard(userId: string) {
           nickname: user.nickname,
           circleNickname: circleMembershipPeriods.circleNickname,
           image: user.image,
+          avatarMediaId: userProfileAppearance.avatarMediaId,
         })
         .from(circleMemberRelations)
         .innerJoin(
@@ -483,6 +485,10 @@ export async function getCircleDashboard(userId: string) {
           eq(circleMembershipPeriods.relationId, circleMemberRelations.id),
         )
         .innerJoin(user, eq(circleMemberRelations.userId, user.id))
+        .leftJoin(
+          userProfileAppearance,
+          eq(userProfileAppearance.userId, user.id),
+        )
         .where(inArray(circleMemberRelations.circleId, circleIds))
         .orderBy(circleMembershipPeriods.joinedAt)
     : [];
@@ -508,7 +514,11 @@ export async function getCircleDashboard(userId: string) {
         id: member.id,
         name: member.circleNickname ?? member.nickname ?? member.name,
         realName: member.realName,
-        image: member.image,
+        image: isActive
+          ? member.avatarMediaId
+            ? `/api/media/${member.avatarMediaId}/thumbnail`
+            : member.image
+          : null,
       });
     }
     const lastViewedAt = row.lastViewedAt;
@@ -780,6 +790,7 @@ export async function getCircleDetail(userId: string, circleId: string) {
       nickname: user.nickname,
       circleNickname: circleMembershipPeriods.circleNickname,
       image: user.image,
+      avatarMediaId: userProfileAppearance.avatarMediaId,
       joinedAt: circleMembershipPeriods.joinedAt,
       leftAt: circleMembershipPeriods.leftAt,
     })
@@ -789,6 +800,10 @@ export async function getCircleDetail(userId: string, circleId: string) {
       eq(circleMembershipPeriods.relationId, circleMemberRelations.id),
     )
     .innerJoin(user, eq(circleMemberRelations.userId, user.id))
+    .leftJoin(
+      userProfileAppearance,
+      eq(userProfileAppearance.userId, user.id),
+    )
     .where(eq(circleMemberRelations.circleId, circleId))
     .orderBy(circleMembershipPeriods.joinedAt);
 
@@ -828,7 +843,11 @@ export async function getCircleDetail(userId: string, circleId: string) {
       realName: profile.realName,
       nickname: profile.nickname,
       circleNickname,
-      image: profile.image,
+      image: isArchived
+        ? null
+        : profile.avatarMediaId
+          ? `/api/media/${profile.avatarMediaId}/thumbnail`
+          : profile.image,
       isActive: isArchived || identityPeriod !== null,
       periods: periods.map((period) => ({
         id: period.periodId,

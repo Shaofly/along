@@ -112,3 +112,32 @@ export async function uploadMediaFiles(
   onProgress({ percent: 100, phase: "processing" });
   return uploaded;
 }
+
+export async function waitForMediaReady(
+  mediaId: string,
+  options: { attempts?: number; interval?: number } = {},
+) {
+  const attempts = options.attempts ?? 45;
+  const interval = options.interval ?? 800;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetch(`/api/media/${mediaId}/status`, {
+      cache: "no-store",
+    });
+    const result = (await response.json()) as {
+      error?: string;
+      failureCode?: string | null;
+      status?: "uploaded" | "processing" | "ready" | "failed" | "deleting";
+    };
+    if (!response.ok) {
+      throw new Error(result.error ?? "图片处理状态读取失败。");
+    }
+    if (result.status === "ready") return;
+    if (result.status === "failed" || result.status === "deleting") {
+      throw new Error("图片处理失败，请重新选择。");
+    }
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, interval);
+    });
+  }
+  throw new Error("图片仍在处理中，请稍后再次保存。");
+}

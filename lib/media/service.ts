@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { and, eq, gt, inArray, isNull, lt, notExists } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, notExists, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -15,6 +15,7 @@ import {
   mediaVariants,
   posts,
   postMedia,
+  userProfileAppearance,
 } from "@/db/schema";
 import type { MediaVariantType } from "@/lib/media/contracts";
 import { LocalSharpProcessor } from "@/lib/media/local-processor";
@@ -278,7 +279,7 @@ export async function readMediaObject(storageKey: string, legacy: boolean) {
 }
 
 export async function deleteMediaAsset(mediaId: string) {
-  const [postReference, draftReference, archiveReference] = await Promise.all([
+  const [postReference, draftReference, archiveReference, profileReference] = await Promise.all([
     db
       .select({ mediaId: postMedia.mediaId })
       .from(postMedia)
@@ -294,8 +295,23 @@ export async function deleteMediaAsset(mediaId: string) {
       .from(circleExitSnapshotMedia)
       .where(eq(circleExitSnapshotMedia.mediaId, mediaId))
       .limit(1),
+    db
+      .select({ userId: userProfileAppearance.userId })
+      .from(userProfileAppearance)
+      .where(
+        or(
+          eq(userProfileAppearance.avatarMediaId, mediaId),
+          eq(userProfileAppearance.coverMediaId, mediaId),
+        ),
+      )
+      .limit(1),
   ]);
-  if (postReference.length || draftReference.length || archiveReference.length) {
+  if (
+    postReference.length ||
+    draftReference.length ||
+    archiveReference.length ||
+    profileReference.length
+  ) {
     return false;
   }
 

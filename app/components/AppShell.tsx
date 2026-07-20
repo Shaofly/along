@@ -1,13 +1,15 @@
 "use client";
 
 import { animate, AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
-import { ArrowLeft, Bell, FilePenLine, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, FilePenLine, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MouseEvent, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
 import { TaskRouteTransitionProvider } from "@/app/components/TaskRouteTransition";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import { authClient } from "@/lib/auth-client";
 
 export type ShellUser = {
@@ -61,20 +63,12 @@ function isTaskRoutePath(pathname: string) {
   return pathname === "/compose/personal"
     || /^\/circles\/[^/]+\/compose$/.test(pathname)
     || /^\/drafts\/[^/]+\/edit$/.test(pathname)
-    || /^\/posts\/[^/]+\/edit$/.test(pathname);
+    || /^\/posts\/[^/]+\/edit$/.test(pathname)
+    || /^\/profile\/[^/]+\/edit$/.test(pathname);
 }
 
 function drawerWidth() {
   return Math.min(window.innerWidth * 0.84, 340);
-}
-
-function Avatar({ user }: { user: ShellUser }) {
-  return user.image ? (
-    // eslint-disable-next-line @next/next/no-img-element -- Private avatars are served by authenticated routes later.
-    <img alt="" src={user.image} />
-  ) : (
-    <span aria-hidden="true">{user.name.slice(0, 1)}</span>
-  );
 }
 
 export function AppShell({
@@ -97,6 +91,9 @@ export function AppShell({
   const [secondaryExiting, setSecondaryExiting] = useState(false);
   const [taskExiting, setTaskExiting] = useState(false);
   const stageX = useMotionValue(0);
+  const desktopAccountRef = useRef<HTMLDivElement>(null);
+  const desktopAccountTriggerRef = useRef<HTMLButtonElement>(null);
+  const desktopAccountPathRef = useRef(pathname);
   const gestureStart = useRef<{
     captureTarget: HTMLDivElement;
     lastTime: number;
@@ -118,10 +115,14 @@ export function AppShell({
   const activeRoute = pendingNavigation?.fromPath === pathname
     ? pendingNavigation.value
     : routeFromPath(pathname, user.id);
+  const accountDisplayName = user.nickname ?? user.realName;
+  const menuVisible =
+    menuOpen && desktopAccountPathRef.current === pathname;
 
   useEffect(() => {
     const onPopState = () => {
       setDrawerOpen(false);
+      setPendingNavigation(null);
       snapStage(false);
     };
     window.addEventListener("popstate", onPopState);
@@ -148,6 +149,29 @@ export function AppShell({
       document.body.style.overflow = previousOverflow;
     };
   }, [drawerOpen]);
+
+  useEffect(() => {
+    if (!menuVisible) return;
+    function closeFromOutside(event: globalThis.PointerEvent) {
+      if (
+        event.target instanceof Node &&
+        !desktopAccountRef.current?.contains(event.target)
+      ) {
+        setMenuOpen(false);
+      }
+    }
+    function closeFromKeyboard(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      desktopAccountTriggerRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", closeFromOutside);
+    document.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeFromOutside);
+      document.removeEventListener("keydown", closeFromKeyboard);
+    };
+  }, [menuVisible]);
 
   function snapStage(open: boolean) {
     const target = open ? drawerWidth() : 0;
@@ -372,7 +396,7 @@ export function AppShell({
         inert={drawerOpen ? undefined : true}
       >
         <div className="drawer-profile">
-          <div className="drawer-avatar"><Avatar user={user} /></div>
+          <div className="drawer-avatar"><UserAvatar image={user.image} name={user.name} /></div>
           <div>
             <strong>{user.name}</strong>
             {user.nickname ? <span>{user.realName}</span> : null}
@@ -414,14 +438,29 @@ export function AppShell({
                 >
                   <ArrowLeft aria-hidden="true" size={21} strokeWidth={1.9} />
                 </button>
-              ) : null}
+              ) : (
+                <Link
+                  aria-label="回到首页"
+                  className="header-brand-mark"
+                  href="/home"
+                >
+                  <Image
+                    alt=""
+                    height={38}
+                    src="/branding/along-mark.png"
+                    width={38}
+                  />
+                </Link>
+              )}
+              <button
+                className="header-avatar header-mobile-account-trigger"
+                aria-label="打开个人菜单"
+                onClick={openDrawer}
+                type="button"
+              >
+                <UserAvatar image={user.image} name={user.name} />
+              </button>
               <div className="header-navigation-cluster">
-                <button className="header-avatar" aria-label="打开个人菜单" onClick={() => {
-                  if (window.matchMedia("(max-width: 700px)").matches) openDrawer();
-                  else setMenuOpen((current) => !current);
-                }} type="button">
-                  <Avatar user={user} />
-                </button>
                 <SegmentedControl
                   ariaLabel="主要栏目"
                   className="primary-navigation"
@@ -433,24 +472,6 @@ export function AppShell({
               </div>
             </div>
             <span className="mobile-header-name">{secondaryTitle ?? user.name}</span>
-            <AnimatePresence>
-              {menuOpen ? (
-                <motion.div
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  className="desktop-account-menu"
-                  exit={{ opacity: 0, y: -5, scale: 0.98 }}
-                  initial={{ opacity: 0, y: -7, scale: 0.98 }}
-                  transition={{ duration: reducedMotion ? 0.01 : 0.18 }}
-                >
-                  <div><strong>{user.name}</strong>{user.nickname ? <span>{user.realName}</span> : null}</div>
-                  <Link href={`/profile/${user.id}`} onClick={() => setMenuOpen(false)}><UserRound size={17} />我的主页</Link>
-                  <Link href="/drafts" onClick={() => setMenuOpen(false)}><FilePenLine size={17} />草稿箱{user.draftCount > 0 ? `（${user.draftCount}）` : ""}</Link>
-                  <Link href="/notifications" onClick={() => setMenuOpen(false)}><Bell size={17} />通知</Link>
-                  <Link href="/friends" onClick={() => setMenuOpen(false)}><UsersRound size={17} />朋友与邀请</Link>
-                  <button onClick={signOut} type="button"><LogOut size={17} />退出登录</button>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
           </div>
 
           <div className="header-utility-actions">
@@ -471,6 +492,59 @@ export function AppShell({
             >
               <Bell size={21} strokeWidth={1.9} />
             </Link>
+            <div className="header-account" ref={desktopAccountRef}>
+              <button
+                aria-expanded={menuVisible}
+                aria-haspopup="menu"
+                aria-label={`打开 ${accountDisplayName} 的个人菜单`}
+                className="header-account-trigger"
+                onClick={() => {
+                  if (menuVisible) {
+                    setMenuOpen(false);
+                    return;
+                  }
+                  desktopAccountPathRef.current = pathname;
+                  setMenuOpen(true);
+                }}
+                ref={desktopAccountTriggerRef}
+                type="button"
+              >
+                <span className="header-account-avatar">
+                  <UserAvatar image={user.image} name={user.name} />
+                </span>
+                <span
+                  className="header-account-name"
+                  title={accountDisplayName}
+                >
+                  {accountDisplayName}
+                </span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="header-account-chevron"
+                  size={17}
+                  strokeWidth={1.9}
+                />
+              </button>
+              <AnimatePresence>
+                {menuVisible ? (
+                  <motion.div
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    className="desktop-account-menu"
+                    exit={{ opacity: 0, y: -5, scale: 0.98 }}
+                    initial={{ opacity: 0, y: -7, scale: 0.98 }}
+                    role="menu"
+                    transition={{ duration: reducedMotion ? 0.01 : 0.18 }}
+                  >
+                    <div><strong>{user.name}</strong>{user.nickname ? <span>{user.realName}</span> : null}</div>
+                    <Link href={`/profile/${user.id}`} onClick={() => setMenuOpen(false)} role="menuitem"><UserRound size={17} />我的主页</Link>
+                    <Link href="/drafts" onClick={() => setMenuOpen(false)} role="menuitem"><FilePenLine size={17} />草稿箱{user.draftCount > 0 ? `（${user.draftCount}）` : ""}</Link>
+                    <Link href="/notifications" onClick={() => setMenuOpen(false)} role="menuitem"><Bell size={17} />通知</Link>
+                    <Link href="/friends" onClick={() => setMenuOpen(false)} role="menuitem"><UsersRound size={17} />朋友与邀请</Link>
+                    <button onClick={signOut} role="menuitem" type="button"><LogOut size={17} />退出登录</button>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
           </div>
         </header>
         <TaskRouteTransitionProvider value={leaveTaskRoute}>

@@ -12,6 +12,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 圈子冻结、恢复与到期硬删除 | `已实现` | `circles.frozen_at`、`delete_at`、`recoverable_by_user_id` | 依赖内部维护任务按时执行 |
 | 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
 | 圈子动态与草稿参与者 | `已实现` | `post_participants`、`draft_participants`、完整发布器与发布、编辑接口 | 首页快捷发布器按产品规则不提供参与者选择 |
+| 个人资料、资料隐私与资料媒体 | `已实现` | `user_profile_appearance`、`user_profile_details`、指定查看者与资料接口 | 头像、封面、主题、可选个人信息和关系级裁剪 |
 | 地点与地图表 | `已确认设计` | [地图与地点功能](features/map.md) | 当前 Schema 尚无地点表 |
 | 评论、回应与完整通知 | `未来设想` | 产品规则已有方向 | 当前 Schema 尚无完整数据模型 |
 
@@ -25,6 +26,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 内容 | `posts`、`post_viewers`、`post_participants`、`drafts`、`draft_viewers`、`draft_participants` |
 | 退出档案 | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` |
 | 媒体 | `media_assets`、`media_variants`、`media_upload_sessions`、`media_processing_jobs`、`post_media`、`draft_media` |
+| 个人资料 | `user_profile_appearance`、`user_profile_details`、`user_profile_detail_viewers` |
 
 二进制图片不进入 PostgreSQL。数据库只保存随机存储键、归属、类型、大小、尺寸、处理状态和内容关联。
 
@@ -40,6 +42,11 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - `post_participants` 保存圈子动态明确标记的参与者。作者必须是参与者；编辑者、媒体上传者和普通可见者不会自动成为参与者。
 - `draft_participants` 保存圈子草稿尚未发布的参与者选择。草稿作者始终在其中；退出成员可以保留在旧草稿里供作者识别，但发布前必须移除。
 - `user.bio` 是个人简介的唯一字段，首页可以把它按单行个性签名展示，不增加重复的 `signature` 字段。
+- `user_profile_appearance` 以用户为主键保存主题、头像与封面媒体引用以及各自焦点。`user.image` 只作为旧账号兼容回退，新资料媒体不写回普通 URL 字段。
+- `user_profile_details` 保存性别、规范化现居地、手机号、独立联系邮箱、学校、当前可见范围和上一个非私密范围。现居地仍是一个文本字段，不拆分为省、市数据库列；编辑器按国内或海外结构化收集后写成以` · `分隔的规范字符串，避免固定列无法表达海外地区。
+- `user_profile_detail_viewers` 保存`selected（指定朋友）`范围中的候选人。读取时仍必须验证双方当前存在直接朋友关系，关系表不是永久授权；解除好友后旧选择行不能继续授予权限。
+- `selected`没有任何指定朋友时，资料保存事务把当前范围归一为`private`。若资料原本已经私密，则保留此前记住的有效共享配置；否则清空这次无效选择。隐私保护恢复共享范围前还要联合当前朋友关系确认`selected`仍至少存在一位有效查看者，不能恢复成零查看者或只有失效好友关系的状态。
+- 联系邮箱与`user.email（登录邮箱）`分开保存。编辑器首次没有资料行时可以用登录邮箱初始化联系邮箱，但保存后两者独立，资料读取不得把登录邮箱作为面向他人的回退。
 - 所有姓名字段在写入时去除首尾空白；真名不得为空，昵称、备注和圈子昵称为空字符串时统一转为 `NULL`。
 
 ## 命名与类型
@@ -79,7 +86,10 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 每个媒体资源最多关联一条草稿，草稿内位置保持 0 至 19 唯一；草稿被放弃时，未进入正式内容的私有媒体一并清理，发布成功时只删除草稿关系而保留正式媒体。
 - 正文长度、媒体字节数和单条内容的媒体排序位置有数据库级边界。
 - `media_assets` 是逻辑资源，`media_variants` 以“媒体 + 变体类型”为主键保存 `thumbnail`、`preview`、`hd` 三个正式对象。
-- `media_assets.content_committed_at（正式内容绑定时间）`在首次写入正式动态或退出档案媒体关联时由数据库触发器设置。已有值不可清空或改写，上传者直通只能用于仍在有效上传会话中的未正式绑定资源。
+- `media_assets.content_committed_at（正式内容绑定时间）`在首次写入正式动态、退出档案媒体关联、头像或封面关联时由数据库触发器设置。已有值不可清空或改写，上传者直通只能用于仍在有效上传会话中的未正式绑定资源。
+- 头像与封面焦点使用 0 至 10000 的整数保存归一化位置；头像与封面媒体分别唯一，且同一资料不能把同一资源同时用于两个角色。
+- 个人信息可见范围只能是`all（所有已有主页访问者）`、`selected（指定当前朋友）`或`private（仅本人）`；上一个共享范围只能保存`all`或`selected`。指定查看者不能是资料主人本人。
+- 资料保存锁定用户行，在同一事务中更新个人信息、可见范围和全部指定朋友。隐私保护快捷操作只切换当前范围并保留指定朋友；首次关闭保护时直接进入`all`，后续优先恢复上一次`all`或`selected`范围。
 - `media_upload_sessions` 保存 incoming Key、预期类型和大小以及 24 小时过期时间；`media_processing_jobs` 保存处理提供方、尝试次数和失败原因。
 - 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
 - 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。媒体后台结算只改变发布状态，不冒充用户正文编辑或推进正文并发版本。

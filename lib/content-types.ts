@@ -1,4 +1,7 @@
 export type PostVisibility = "friends" | "selected" | "private";
+export type ProfileTheme = "sage" | "rose" | "mist" | "apricot" | "ink";
+export type ProfileInfoVisibility = "all" | "selected" | "private";
+export type ProfileViewMode = "all" | "personal" | "shared" | "private";
 
 export type DraftMedia = {
   id: string;
@@ -113,4 +116,47 @@ export type FriendSummary = {
   remark: string | null;
   image: string | null;
   bio: string;
+};
+
+export type ProfilePageData = {
+  id: string;
+  name: string;
+  realName: string;
+  nickname: string | null;
+  image: string | null;
+  legacyImage: string | null;
+  bio: string;
+  email: string | null;
+  personalInfo: {
+    gender: string | null;
+    residence: string | null;
+    phone: string | null;
+    contactEmail: string | null;
+    school: string | null;
+  } | null;
+  personalInfoSettings: {
+    visibility: ProfileInfoVisibility;
+    lastSharedVisibility: Exclude<ProfileInfoVisibility, "private"> | null;
+    selectedFriendIds: string[];
+  } | null;
+  theme: ProfileTheme;
+  avatar: {
+    mediaId: string | null;
+    src: string | null;
+    focusX: number;
+    focusY: number;
+  };
+  cover: {
+    mediaId: string | null;
+    src: string | null;
+    focusX: number;
+    focusY: number;
+  } | null;
+  createdAt: string;
+  isSelf: boolean;
+  audience: "self" | "friend" | "circle";
+  isLimitedByCircle: boolean;
+  posts: FeedPost[];
+  nextCursor: string | null;
+  view: ProfileViewMode;
 };

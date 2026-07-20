@@ -5,7 +5,6 @@ import {
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -72,7 +71,6 @@ export function SegmentedControl<Value extends string>({
   role?: "radiogroup" | "tablist";
   value: Value;
 }) {
-  const generatedId = useId().replaceAll(":", "");
   const reduceMotion = useReducedMotion();
   const trackRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -97,11 +95,11 @@ export function SegmentedControl<Value extends string>({
     if (!track) return;
 
     function measure() {
-      const trackBounds = track!.getBoundingClientRect();
       const next = buttonRefs.current.map((button) => {
-        const bounds = button?.getBoundingClientRect();
-        const x = bounds ? bounds.left - trackBounds.left : 0;
-        const width = bounds?.width ?? 0;
+        // Layout coordinates stay stable while a parent modal scales open.
+        // Screen coordinates would freeze the pill at the temporary scale.
+        const x = button?.offsetLeft ?? 0;
+        const width = button?.offsetWidth ?? 0;
         return { x, width, center: x + width / 2 };
       });
       setGeometries((current) => {
@@ -243,11 +241,13 @@ export function SegmentedControl<Value extends string>({
           aria-hidden="true"
           className="segmented-control-indicator"
           initial={false}
-          layoutId={`segmented-${generatedId}`}
           transition={
             dragGeometry || reduceMotion
               ? { duration: 0 }
-              : { type: "spring", stiffness: 380, damping: 30, mass: 0.8 }
+              : {
+                  duration: 0.24,
+                  ease: [0.22, 1, 0.36, 1],
+                }
           }
         />
       ) : null}

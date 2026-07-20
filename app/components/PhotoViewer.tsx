@@ -25,6 +25,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { UserAvatar } from "@/app/components/UserAvatar";
+
 type ViewerPhoto = {
   id: string;
   thumbnailSrc: string;
@@ -665,7 +667,7 @@ export function PhotoViewer({
         <span className="photo-viewer-count">{index + 1} / {photos.length}</span>
         <span className="photo-viewer-author">
           <span className="photo-viewer-avatar">
-            {author.image ? <img alt="" src={author.image} /> : author.name.slice(0, 1)}
+            <UserAvatar image={author.image} name={author.name} />
           </span>
           <strong>{author.name}</strong>
         </span>

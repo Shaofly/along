@@ -58,6 +58,20 @@ export const mediaJobStatus = pgEnum("media_job_status", [
   "failed",
 ]);
 
+export const profileTheme = pgEnum("profile_theme", [
+  "sage",
+  "rose",
+  "mist",
+  "apricot",
+  "ink",
+]);
+
+export const profileInfoVisibility = pgEnum("profile_info_visibility", [
+  "all",
+  "selected",
+  "private",
+]);
+
 export const circleStatus = pgEnum("circle_status", [
   "active",
   "frozen",
@@ -938,6 +952,129 @@ export const mediaAssets = pgTable(
       sql`${table.status} = 'failed' or ${table.failureCode} is null`,
     ),
     check("media_assets_timestamps_ordered", sql`${table.updatedAt} >= ${table.createdAt}`),
+  ],
+);
+
+export const userProfileAppearance = pgTable(
+  "user_profile_appearance",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    avatarMediaId: text("avatar_media_id").references(() => mediaAssets.id, {
+      onDelete: "restrict",
+    }),
+    coverMediaId: text("cover_media_id").references(() => mediaAssets.id, {
+      onDelete: "restrict",
+    }),
+    theme: profileTheme("theme").default("sage").notNull(),
+    avatarFocusX: integer("avatar_focus_x").default(5000).notNull(),
+    avatarFocusY: integer("avatar_focus_y").default(5000).notNull(),
+    coverFocusX: integer("cover_focus_x").default(5000).notNull(),
+    coverFocusY: integer("cover_focus_y").default(5000).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_profile_appearance_avatar_media_idx").on(
+      table.avatarMediaId,
+    ),
+    uniqueIndex("user_profile_appearance_cover_media_idx").on(
+      table.coverMediaId,
+    ),
+    check(
+      "user_profile_appearance_avatar_focus_range",
+      sql`${table.avatarFocusX} between 0 and 10000
+        and ${table.avatarFocusY} between 0 and 10000`,
+    ),
+    check(
+      "user_profile_appearance_cover_focus_range",
+      sql`${table.coverFocusX} between 0 and 10000
+        and ${table.coverFocusY} between 0 and 10000`,
+    ),
+    check(
+      "user_profile_appearance_distinct_media",
+      sql`${table.avatarMediaId} is null
+        or ${table.coverMediaId} is null
+        or ${table.avatarMediaId} <> ${table.coverMediaId}`,
+    ),
+  ],
+);
+
+export const userProfileDetails = pgTable(
+  "user_profile_details",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    gender: text("gender"),
+    residence: text("residence"),
+    phone: text("phone"),
+    contactEmail: text("contact_email"),
+    school: text("school"),
+    visibility: profileInfoVisibility("visibility")
+      .default("private")
+      .notNull(),
+    lastSharedVisibility: profileInfoVisibility("last_shared_visibility"),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      "user_profile_details_gender_length",
+      sql`${table.gender} is null or char_length(${table.gender}) <= 32`,
+    ),
+    check(
+      "user_profile_details_residence_length",
+      sql`${table.residence} is null or char_length(${table.residence}) <= 80`,
+    ),
+    check(
+      "user_profile_details_phone_length",
+      sql`${table.phone} is null or char_length(${table.phone}) <= 40`,
+    ),
+    check(
+      "user_profile_details_contact_email_length",
+      sql`${table.contactEmail} is null or char_length(${table.contactEmail}) <= 254`,
+    ),
+    check(
+      "user_profile_details_contact_email_normalized",
+      sql`${table.contactEmail} is null
+        or ${table.contactEmail} = lower(btrim(${table.contactEmail}))`,
+    ),
+    check(
+      "user_profile_details_school_length",
+      sql`${table.school} is null or char_length(${table.school}) <= 100`,
+    ),
+    check(
+      "user_profile_details_last_shared_visibility",
+      sql`${table.lastSharedVisibility} is null
+        or ${table.lastSharedVisibility} in ('all', 'selected')`,
+    ),
+  ],
+);
+
+export const userProfileDetailViewers = pgTable(
+  "user_profile_detail_viewers",
+  {
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => userProfileDetails.userId, { onDelete: "cascade" }),
+    viewerId: text("viewer_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    selectedAt: timestamp("selected_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.viewerId] }),
+    index("user_profile_detail_viewers_viewer_idx").on(table.viewerId),
+    check(
+      "user_profile_detail_viewers_distinct_users",
+      sql`${table.ownerId} <> ${table.viewerId}`,
+    ),
   ],
 );
 

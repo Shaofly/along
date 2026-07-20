@@ -5,6 +5,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -60,7 +61,7 @@ export function ModalSurface({
   onRequestClose: () => void;
   open: boolean;
   role?: "alertdialog" | "dialog";
-  size?: "compact" | "standard" | "wide";
+  size?: "compact" | "standard" | "wide" | "expanded";
 }) {
   const [mounted, setMounted] = useState(open);
   const [phase, setPhase] = useState<ModalPhase>("opening");
@@ -101,6 +102,16 @@ export function ModalSurface({
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [mounted, onAfterClose, open, portalReady]);
+
+  useLayoutEffect(() => {
+    if (!mounted || !open || !portalReady) return;
+    dialogRef.current
+      ?.querySelectorAll<HTMLElement>("[data-modal-scroll-root]")
+      .forEach((element) => {
+        element.scrollLeft = 0;
+        element.scrollTop = 0;
+      });
+  }, [mounted, open, portalReady]);
 
   useEffect(() => {
     if (!mounted || !portalReady) return;

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
@@ -8,6 +8,7 @@ import {
   draftMedia,
   mediaAssets,
   postMedia,
+  userProfileAppearance,
 } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { canAccessMedia } from "@/lib/media/access";
@@ -86,6 +87,22 @@ export async function DELETE(
   if (archiveLink) {
     return NextResponse.json(
       { error: "这张图片仍属于一份退出档案，不能单独删除。" },
+      { status: 409 },
+    );
+  }
+  const [profileLink] = await db
+    .select({ userId: userProfileAppearance.userId })
+    .from(userProfileAppearance)
+    .where(
+      or(
+        eq(userProfileAppearance.avatarMediaId, id),
+        eq(userProfileAppearance.coverMediaId, id),
+      ),
+    )
+    .limit(1);
+  if (profileLink) {
+    return NextResponse.json(
+      { error: "这张图片仍是头像或个人封面，请先在资料中替换或移除。" },
       { status: 409 },
     );
   }

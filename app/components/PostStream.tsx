@@ -9,6 +9,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
 import { PhotoViewer } from "@/app/components/PhotoViewer";
 import { PostEditor } from "@/app/components/PostEditor";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import type {
   FeedPost,
   FriendSummary,
@@ -105,7 +106,7 @@ export function PostStream({
         return (
           <article className="feed-entry" key={post.id}>
             <Link className="entry-avatar" href={`/profile/${post.author.id}`}>
-              {post.author.name.slice(0, 1)}
+              <UserAvatar image={post.author.image} name={post.author.name} />
             </Link>
             <div className="entry-content">
               <header>

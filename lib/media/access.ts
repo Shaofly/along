@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -13,8 +13,10 @@ import {
   mediaAssets,
   mediaUploadSessions,
   postMedia,
+  userProfileAppearance,
 } from "@/db/schema";
 import { canViewPost } from "@/lib/content";
+import { canViewProfileMedia } from "@/lib/profile-permissions";
 
 export async function canAccessMedia(userId: string, mediaId: string) {
   const [asset] = await db
@@ -28,7 +30,7 @@ export async function canAccessMedia(userId: string, mediaId: string) {
     .limit(1);
   if (!asset) return false;
 
-  const [postLinks, draftLinks, archiveLinks] = await Promise.all([
+  const [postLinks, draftLinks, archiveLinks, profileLinks] = await Promise.all([
     db
       .select({ postId: postMedia.postId })
       .from(postMedia)
@@ -63,6 +65,19 @@ export async function canAccessMedia(userId: string, mediaId: string) {
         eq(circleExitSnapshots.relationId, circleMemberRelations.id),
       )
       .where(eq(circleExitSnapshotMedia.mediaId, mediaId)),
+    db
+      .select({
+        userId: userProfileAppearance.userId,
+        avatarMediaId: userProfileAppearance.avatarMediaId,
+        coverMediaId: userProfileAppearance.coverMediaId,
+      })
+      .from(userProfileAppearance)
+      .where(
+        or(
+          eq(userProfileAppearance.avatarMediaId, mediaId),
+          eq(userProfileAppearance.coverMediaId, mediaId),
+        ),
+      ),
   ]);
 
   for (const link of postLinks) {
@@ -77,6 +92,10 @@ export async function canAccessMedia(userId: string, mediaId: string) {
   ) {
     return true;
   }
+  for (const link of profileLinks) {
+    const role = link.avatarMediaId === mediaId ? "avatar" : "cover";
+    if (await canViewProfileMedia(userId, link.userId, role)) return true;
+  }
 
   if (
     asset.ownerId !== userId ||
@@ -84,7 +103,8 @@ export async function canAccessMedia(userId: string, mediaId: string) {
     asset.status === "deleting" ||
     postLinks.length > 0 ||
     draftLinks.length > 0 ||
-    archiveLinks.length > 0
+    archiveLinks.length > 0 ||
+    profileLinks.length > 0
   ) {
     return false;
   }

@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
 import { AppShell } from "@/app/components/AppShell";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import { auth } from "@/lib/auth";
 import { getCircleDetail } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
@@ -46,7 +47,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             <div className="circle-member-list">
               {archivedMembers.map((member) => (
                 <article key={member.id}>
-                  <span>{member.name.slice(0, 1)}</span>
+                  <span><UserAvatar image={member.image} name={member.name} /></span>
                   <div>
                     <strong>
                       {member.circleNickname ?? member.nickname ?? member.name}
@@ -66,7 +67,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             <div className="circle-member-list">
               {activeMembers.map((member) => (
                 <article key={member.id}>
-                  <span>{member.name.slice(0, 1)}</span>
+                  <span><UserAvatar image={member.image} name={member.name} /></span>
                   <div><strong>{member.circleNickname ?? member.nickname ?? member.name}{(member.circleNickname || member.nickname) ? `（${member.realName}）` : ""}</strong><small>{periodLabel(member.periods.at(-1)!.joinedAt, null)}</small></div>
                 </article>
               ))}
@@ -81,7 +82,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             <div className="circle-member-list former">
               {formerMembers.map((member) => (
                 <article key={member.id}>
-                  <span>{member.name.slice(0, 1)}</span>
+                  <span><UserAvatar image={member.image} name={member.name} /></span>
                   <div>
                     <strong>{member.name}</strong>
                     {member.periods.map((period) => <small key={period.id}>{periodLabel(period.joinedAt, period.leftAt)}</small>)}

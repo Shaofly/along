@@ -5,6 +5,7 @@ import { notFound, redirect } from "next/navigation";
 import { PostStream } from "@/app/components/PostStream";
 import { AppShell } from "@/app/components/AppShell";
 import { ComposerLauncher } from "@/app/components/ComposerLauncher";
+import { UserAvatar } from "@/app/components/UserAvatar";
 import { auth } from "@/lib/auth";
 import { getCircleDetail } from "@/lib/circles";
 import { getCircleArchivePosts, getVisiblePosts } from "@/lib/content";
@@ -69,7 +70,9 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
             </div>
             <div className="circle-cover-members">
               {visibleMembers.slice(0, 5).map((member) => (
-                <span key={member.id}>{member.name.slice(0, 1)}</span>
+                <span key={member.id}>
+                  <UserAvatar image={member.image} name={member.name} />
+                </span>
               ))}
             </div>
           </section>

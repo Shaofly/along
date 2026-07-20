@@ -1,60 +1,59 @@
-# SegmentedControl Design QA
+# Desktop Profile Design QA
 
 ## Evidence
 
-- Source visual truth: `/Users/msf/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/nt_qq_12189cae1bcc404b431935537fed1be0/nt_data/Video/2026-07/Ori/836c79e14d929b2f455215939176f8f2.mp4`
-- Source comparison frame: `/private/tmp/along-motion-3.png`
-- Desktop implementation capture: `/private/tmp/along-segmented-desktop.png`
-- Mobile implementation capture: `/private/tmp/along-segmented-mobile.png`
-- Route and state: `http://localhost:3001/`, login tab selected and registration tab selected
-- Viewports: 1440 x 900 and 390 x 844
+- Primary visual reference: `/Users/msf/Downloads/已生成图像 1 (2).png`
+- Header account reference: `/Users/msf/Downloads/已生成图像 2.png`
+- Implementation capture: `/private/tmp/new-chat-profile-transparent-header-v2-1645x956.png`
+- Route: `http://localhost:3000/profile/JffWWzlWM3CLfbpTplYUaroBMKTOdlkA`
+- Viewport: `1645 × 956`
+- State: signed-in owner profile with a real cover image, personal information, privacy shortcut, posts, and no uploaded avatar
 
-The reference is a motion example rather than an Along visual mockup. The comparison therefore uses its fast initial movement and softly damped landing as motion truth, while the existing Along palette, typography, radii, and spacing remain the visual truth.
+The two source images are the visual truth for the desktop profile cover, fade, identity scale, action colors, and account entry. Existing Along product behavior and real user data remain the truth for copy, brand assets, privacy information, and content.
 
-## Findings
+## Final Findings
 
-- No actionable P0, P1, or P2 differences remain.
-- The implementation uses one shared capsule indicator per control. Desktop and mobile captures show no duplicate indicator, layout jump, clipping, or horizontal overflow.
-- The spring is restrained and settles without a visible bounce. Text color changes separately and does not flash or move the label.
+- No actionable P0, P1, or P2 visual differences remain.
+- The 610-pixel cover starts at the viewport top and remains visible through the shared 82-pixel translucent desktop header.
+- The cover fades through several low-contrast stops into the warm page background, with the identity block placed at the fade tail rather than over a hard image edge.
+- Avatar, name, description, record date, and action buttons now follow the source proportions and visual weight.
+- The primary and secondary actions use the sampled grass green and peach colors from the reference.
+- The top-right account entry follows the second reference: separate utility buttons, avatar, nickname, and chevron without an enclosing account capsule. Hover keeps the trigger stable and moves only the chevron.
+- The navigation indicator now uses a restrained, non-bouncy transform transition and returns to the correct selected route after browser history navigation.
 
-## Fidelity Surfaces
+## Expected Product-Data Differences
 
-- **Fonts and typography:** Existing system Chinese font stacks, weights, sizes, line heights, and zero letter spacing are unchanged. Labels remain readable at mobile size.
-- **Spacing and layout rhythm:** Existing track height, padding, radius, and page spacing are preserved. The indicator animates with `transform` and `width` without changing track dimensions.
-- **Colors and visual tokens:** Existing warm paper, muted text, ink green, line color, and shadow tokens are retained. Only the shared selection mechanism changed.
-- **Image quality and assets:** No image or icon assets are introduced or replaced by this component. The source video is used only as motion reference.
-- **Copy and content:** Existing labels and app copy are unchanged.
-
-## Interaction Checks
-
-- Mouse click switches the selected option and leaves exactly one indicator.
-- Horizontal drag continuously moves the indicator and snaps to the nearest enabled option on release.
-- Arrow keys switch options and move focus; `Home` and `End` are implemented.
-- Disabled options are skipped by keyboard and drag snapping.
-- Each mounted control receives its own generated `layoutId`.
-- `prefers-reduced-motion` disables spring movement and press scaling, and shortens the text transition.
-- Browser console check found no page warnings or errors.
+- The implementation displays the signed-in user's nickname, initial, contact visibility row, and current post data instead of copying the mockup text.
+- The personal-information row remains between the record date and actions because it is a previously confirmed product requirement; it makes the lower content begin slightly later than in the mockup.
+- The left header mark remains Along's real brand asset instead of the mockup's generated text mark.
+- The account and profile avatars show a fallback initial because this test account has no uploaded avatar. The same components render the stored avatar image when one exists.
 
 ## Comparison History
 
-1. Initial browser pass: click and keyboard behavior passed, but automated drag did not select the target because release handling depended too strictly on pointer-capture state.
-2. Fix: kept pointer capture for continuity but made the active drag session the source of truth during move and release.
-3. Post-fix evidence: drag from the first to second login option selected “邀请注册”; desktop and 390-pixel mobile captures remained stable with one indicator and no overflow.
-4. Follow-up interaction pass: increased the mouse drag threshold so slight cursor movement does not consume a click, and added measured height transitions for conditional publishing, visibility, editing, and authentication content.
-5. Desktop pointer compatibility pass: moved pointer capture from the outer track to the pressed option itself. Real-coordinate mouse click and drag now both change the selected state without competing for the final click event.
+1. Initial comparison found a boxed, short cover, an oversized identity block, muted buttons, and an account capsule that did not match the references.
+2. The cover was changed to a full-width image with a multi-stop fade into `#f1ede4`, then extended behind the shared translucent header without moving the identity block.
+3. The identity was resized to a 94-pixel avatar, 46-pixel title, 18-pixel description, and 15-pixel record date, then positioned at the fade tail.
+4. Actions were resized to `154 × 50` pixels and changed to sampled colors: primary `#577a51`, secondary `#f4b99d`.
+5. The account entry was changed to a 38-pixel avatar, nickname with truncation, and chevron; desktop utility buttons were normalized to 50 pixels.
+6. The navigation spring/shared-layout indicator was replaced with a 240-millisecond `cubic-bezier(0.22, 1, 0.36, 1)` transition to prevent bouncing, cross-control interference, and stale selection after history navigation.
+7. Final full-page and focused comparisons confirmed the intended layout, fade, proportions, colors, and header structure.
+8. Follow-up pass reduced the shared desktop header from 90 to 82 pixels, removed the profile-only opaque override, and confirmed the same header material on the home and profile routes.
 
-## Follow-up Polish
+## Interaction Checks
 
-- The global route navigation remains semantic links rather than a state selector. When its information architecture is normalized across pages, it can adopt the same moving-indicator primitive without replacing link behavior.
+- Clicking a primary navigation item changes route and selected state.
+- Browser Back returns to the profile route and restores the correct selected navigation item.
+- The account trigger opens a visible menu with the current nickname, real name, profile, drafts, notifications, friends, and sign-out actions.
+- Clicking the account trigger again closes the menu and updates `aria-expanded`.
+- Hover leaves the account trigger at `transform: none` with a transparent background; only the chevron translates 2 pixels and reverses direction when the menu is expanded.
+- The privacy shortcut remains a direct in-place toggle rather than opening profile editing.
+- Reduced-motion support remains available through the shared motion styles.
+- Browser logs contain no application runtime errors. Development-only React/HMR messages and an existing LCP optimization warning for the Along brand image were observed.
 
-## Implementation Checklist
+## Responsive Safety
 
-- [x] Shared measured indicator
-- [x] Restrained spring and text transition
-- [x] Press feedback
-- [x] Unequal-width and responsive measurement
-- [x] Drag snapping
-- [x] Keyboard and reduced-motion support
-- [x] Desktop and mobile visual verification
+- Desktop-only sizing and positioning are scoped above the mobile breakpoint.
+- Mobile profile transforms are reset, so the desktop identity offsets do not leak into the 375-pixel layout.
+- Existing mobile actions and header behavior remain structurally unchanged by this desktop visual pass.
 
 final result: passed

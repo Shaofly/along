@@ -21,6 +21,7 @@ import {
   circleMemberRelations,
   circles,
   mediaAssets,
+  mediaVariants,
   postMedia,
   postParticipants,
   posts,
@@ -58,6 +59,10 @@ function toMediaMap(
     mediaId: string;
     originalName: string;
     mimeType: string;
+    width: number | null;
+    height: number | null;
+    sourceWidth: number | null;
+    sourceHeight: number | null;
   }>,
 ) {
   const mediaByPost = new Map<string, FeedPost["media"]>();
@@ -67,6 +72,8 @@ function toMediaMap(
       id: media.mediaId,
       originalName: media.originalName,
       mimeType: media.mimeType,
+      width: media.width ?? media.sourceWidth ?? 1,
+      height: media.height ?? media.sourceHeight ?? 1,
     });
     mediaByPost.set(media.postId, list);
   }
@@ -159,6 +166,7 @@ export async function getVisiblePosts(
     .select({
       id: posts.id,
       body: posts.body,
+      photoLayout: posts.photoLayout,
       visibility: posts.visibility,
       managementMode: posts.managementMode,
       lastEditedById: posts.lastEditedById,
@@ -216,9 +224,20 @@ export async function getVisiblePosts(
         originalName: mediaAssets.originalName,
         mimeType: mediaAssets.mimeType,
         position: postMedia.position,
+        width: mediaVariants.width,
+        height: mediaVariants.height,
+        sourceWidth: mediaAssets.sourceWidth,
+        sourceHeight: mediaAssets.sourceHeight,
       })
       .from(postMedia)
       .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
+      .leftJoin(
+        mediaVariants,
+        and(
+          eq(mediaVariants.mediaId, mediaAssets.id),
+          eq(mediaVariants.variantType, "thumbnail"),
+        ),
+      )
       .where(inArray(postMedia.postId, postIds))
       .orderBy(postMedia.position),
     db
@@ -336,6 +355,7 @@ export async function getVisiblePosts(
       managementMode: row.managementMode,
       publicationStatus: row.publicationStatus,
       publicationError: row.publicationError,
+      photoLayout: row.photoLayout,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       author: {
@@ -409,6 +429,7 @@ export async function getCircleArchivePosts(
     .select({
       id: circleExitSnapshotPosts.id,
       body: circleExitSnapshotPosts.body,
+      photoLayout: circleExitSnapshotPosts.photoLayout,
       createdAt: circleExitSnapshotPosts.createdAt,
       updatedAt: circleExitSnapshotPosts.updatedAt,
       lastEditedById: circleExitSnapshotPosts.lastEditedById,
@@ -430,11 +451,22 @@ export async function getCircleArchivePosts(
       originalName: mediaAssets.originalName,
       mimeType: mediaAssets.mimeType,
       position: circleExitSnapshotMedia.position,
+      width: mediaVariants.width,
+      height: mediaVariants.height,
+      sourceWidth: mediaAssets.sourceWidth,
+      sourceHeight: mediaAssets.sourceHeight,
     })
     .from(circleExitSnapshotMedia)
     .innerJoin(
       mediaAssets,
       eq(circleExitSnapshotMedia.mediaId, mediaAssets.id),
+    )
+    .leftJoin(
+      mediaVariants,
+      and(
+        eq(mediaVariants.mediaId, mediaAssets.id),
+        eq(mediaVariants.variantType, "thumbnail"),
+      ),
     )
     .where(inArray(circleExitSnapshotMedia.snapshotPostId, postIds))
     .orderBy(circleExitSnapshotMedia.position);
@@ -461,6 +493,7 @@ export async function getCircleArchivePosts(
     managementMode: "creator",
     publicationStatus: "published",
     publicationError: null,
+    photoLayout: row.photoLayout,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     author: {

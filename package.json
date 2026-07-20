@@ -1,6 +1,6 @@
 {
   "name": "along",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,7 +10,8 @@
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "(sleep 1 && open \"http://localhost:${PORT:-3000}\") & node --env-file-if-exists=.env.local .next/standalone/server.js",
-    "test": "pnpm run lint && pnpm run typecheck && pnpm run docs:check",
+    "test": "pnpm run test:layout && pnpm run lint && pnpm run typecheck && pnpm run docs:check",
+    "test:layout": "node --experimental-strip-types scripts/photo-layout.test.ts",
     "test:smoke": "node --env-file=.env.local scripts/smoke-test.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

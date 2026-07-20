@@ -1,13 +1,12 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element -- Private media URLs require the viewer's session cookie. */
-
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
 import { PhotoViewer } from "@/app/components/PhotoViewer";
+import { PhotoMosaic } from "@/app/components/PhotoMosaic";
 import { PostEditor } from "@/app/components/PostEditor";
 import { UserAvatar } from "@/app/components/UserAvatar";
 import type {
@@ -136,30 +135,30 @@ export function PostStream({
 
               {post.body ? <p className="entry-body">{post.body}</p> : null}
               {post.media.length > 0 ? (
-                <div className={`post-gallery gallery-${Math.min(post.media.length, 4)}`}>
-                  {post.media.map((media, mediaIndex) => (
-                    <button
-                      data-photo-origin={media.id}
-                      key={media.id}
-                      onClick={(event) => {
-                        const originImage = event.currentTarget.querySelector("img");
-                        const originElement = originImage ?? event.currentTarget;
-                        const originRadius = Number.parseFloat(
-                          window.getComputedStyle(originElement).borderTopLeftRadius,
-                        );
-                        setViewer({
-                          post,
-                          index: mediaIndex,
-                          originRect: originElement.getBoundingClientRect(),
-                          originRadius: Number.isFinite(originRadius) ? originRadius : 0,
-                        });
-                      }}
-                      type="button"
-                    >
-                      <img alt={media.originalName} src={`/api/media/${media.id}/thumbnail`} />
-                    </button>
-                  ))}
-                </div>
+                <PhotoMosaic
+                  className="post-gallery"
+                  interactive
+                  layout={post.photoLayout}
+                  maxHeight={580}
+                  onPhotoClick={(mediaIndex, originElement) => {
+                    const originRadius = Number.parseFloat(
+                      window.getComputedStyle(originElement).borderTopLeftRadius,
+                    );
+                    setViewer({
+                      post,
+                      index: mediaIndex,
+                      originRect: originElement.getBoundingClientRect(),
+                      originRadius: Number.isFinite(originRadius) ? originRadius : 0,
+                    });
+                  }}
+                  photos={post.media.map((media) => ({
+                    key: media.id,
+                    src: `/api/media/${media.id}/thumbnail`,
+                    alt: media.originalName,
+                    width: media.width,
+                    height: media.height,
+                  }))}
+                />
               ) : null}
               {edited ? (
                 <small className="edited-label">

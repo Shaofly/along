@@ -3,6 +3,8 @@ export type UploadedMedia = {
   originalName: string;
   mimeType: string;
   status: "processing" | "ready";
+  width: number;
+  height: number;
 };
 
 export type UploadProgress = {
@@ -69,6 +71,8 @@ function uploadOne(
         name?: string;
         mimeType?: string;
         status?: "processing" | "ready";
+        width?: number;
+        height?: number;
         error?: string;
       };
       if (request.status < 200 || request.status >= 300 || !result.id) {
@@ -80,6 +84,8 @@ function uploadOne(
         originalName: result.name ?? file.name,
         mimeType: result.mimeType ?? file.type,
         status: result.status ?? "processing",
+        width: result.width ?? 1,
+        height: result.height ?? 1,
       });
     });
     request.addEventListener("error", () => reject(new Error("网络中断，图片上传失败。")));

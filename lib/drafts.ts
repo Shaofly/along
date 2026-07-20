@@ -19,6 +19,7 @@ import {
   drafts,
   draftViewers,
   mediaAssets,
+  mediaVariants,
   user,
 } from "@/db/schema";
 import type {
@@ -74,9 +75,20 @@ async function mediaForDrafts(draftIds: string[]) {
       originalName: mediaAssets.originalName,
       mimeType: mediaAssets.mimeType,
       position: draftMedia.position,
+      width: mediaVariants.width,
+      height: mediaVariants.height,
+      sourceWidth: mediaAssets.sourceWidth,
+      sourceHeight: mediaAssets.sourceHeight,
     })
     .from(draftMedia)
     .innerJoin(mediaAssets, eq(draftMedia.mediaId, mediaAssets.id))
+    .leftJoin(
+      mediaVariants,
+      and(
+        eq(mediaVariants.mediaId, mediaAssets.id),
+        eq(mediaVariants.variantType, "thumbnail"),
+      ),
+    )
     .where(inArray(draftMedia.draftId, draftIds))
     .orderBy(draftMedia.position);
   for (const row of rows) {
@@ -85,6 +97,8 @@ async function mediaForDrafts(draftIds: string[]) {
       id: row.id,
       originalName: row.originalName,
       mimeType: row.mimeType,
+      width: row.width ?? row.sourceWidth ?? 1,
+      height: row.height ?? row.sourceHeight ?? 1,
     });
     mediaByDraft.set(row.draftId, list);
   }
@@ -129,6 +143,7 @@ export async function getDraftList(
         visibility: drafts.visibility,
         circleId: drafts.circleId,
         managementMode: drafts.managementMode,
+        photoLayout: drafts.photoLayout,
         createdAt: drafts.createdAt,
         updatedAt: drafts.updatedAt,
         circleName: circles.name,
@@ -196,6 +211,7 @@ export async function getDraftList(
         circleId: row.circleId,
         circle,
         managementMode: row.managementMode,
+        photoLayout: row.photoLayout,
         media,
         mediaCount: media.length,
         ...availability(circle),
@@ -220,6 +236,7 @@ export async function getDraftDetail(
       visibility: drafts.visibility,
       circleId: drafts.circleId,
       managementMode: drafts.managementMode,
+      photoLayout: drafts.photoLayout,
       createdAt: drafts.createdAt,
       updatedAt: drafts.updatedAt,
       circleName: circles.name,
@@ -293,6 +310,7 @@ export async function getDraftDetail(
     circleId: row.circleId,
     circle,
     managementMode: row.managementMode,
+    photoLayout: row.photoLayout,
     media,
     mediaCount: media.length,
     viewerIds: viewerRows.map((viewer) => viewer.userId),

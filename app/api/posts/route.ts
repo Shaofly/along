@@ -19,11 +19,13 @@ import {
   postViewers,
 } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import { photoLayoutSchema } from "@/lib/draft-contracts";
 import {
   assertActiveCircleMutation,
   getActiveCircleMembership,
 } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
+import { normalizePhotoLayout, type PhotoLayoutSpec } from "@/lib/photo-layout";
 
 const createPostSchema = z.object({
   body: z.string().trim().max(5000, "正文不能超过 5000 个字"),
@@ -33,6 +35,7 @@ const createPostSchema = z.object({
   viewerIds: z.array(z.string()).max(100).default([]),
   participantIds: z.array(z.string()).max(10).default([]),
   mediaIds: z.array(z.string()).max(20, "每条动态最多 20 张图片").default([]),
+  photoLayout: photoLayoutSchema.nullable().optional(),
   draftId: z.string().nullable().optional(),
 });
 
@@ -59,6 +62,8 @@ export async function POST(request: Request) {
   const participantIds = circleId
     ? [...new Set([session.user.id, ...parsed.data.participantIds])]
     : [];
+  let mediaRatios: number[] = [];
+  let persistedDraftLayout: PhotoLayoutSpec | null | undefined;
   if (!parsed.data.body && mediaIds.length === 0) {
     return NextResponse.json({ error: "写点什么，或者选择一张图片。" }, { status: 400 });
   }
@@ -99,7 +104,12 @@ export async function POST(request: Request) {
 
   if (mediaIds.length > 0) {
     const ownedMedia = await db
-      .select({ id: mediaAssets.id, status: mediaAssets.status })
+      .select({
+        id: mediaAssets.id,
+        status: mediaAssets.status,
+        width: mediaAssets.sourceWidth,
+        height: mediaAssets.sourceHeight,
+      })
       .from(mediaAssets)
       .where(
         and(
@@ -118,6 +128,11 @@ export async function POST(request: Request) {
     ) {
       return NextResponse.json({ error: "有图片无效或已经发布。" }, { status: 400 });
     }
+    const mediaById = new Map(ownedMedia.map((media) => [media.id, media]));
+    mediaRatios = mediaIds.map((mediaId) => {
+      const media = mediaById.get(mediaId);
+      return (media?.width ?? 1) / (media?.height ?? 1);
+    });
   }
 
   if (draftId) {
@@ -128,11 +143,13 @@ export async function POST(request: Request) {
         circleId: drafts.circleId,
         visibility: drafts.visibility,
         managementMode: drafts.managementMode,
+        photoLayout: drafts.photoLayout,
       })
       .from(drafts)
       .where(and(eq(drafts.id, draftId), eq(drafts.authorId, session.user.id)))
       .limit(1);
     if (!draft) return NextResponse.json({ error: "草稿不存在。" }, { status: 404 });
+    persistedDraftLayout = draft.photoLayout;
     if (
       draft.circleId !== circleId ||
       draft.body !== parsed.data.body ||
@@ -149,7 +166,8 @@ export async function POST(request: Request) {
       db
         .select({ id: draftMedia.mediaId })
         .from(draftMedia)
-        .where(eq(draftMedia.draftId, draftId)),
+        .where(eq(draftMedia.draftId, draftId))
+        .orderBy(draftMedia.position),
       db
         .select({ id: draftViewers.userId })
         .from(draftViewers)
@@ -160,7 +178,10 @@ export async function POST(request: Request) {
         .where(eq(draftParticipants.draftId, draftId)),
     ]);
     const linkedIds = linkedMedia.map((media) => media.id);
-    if (linkedIds.length !== mediaIds.length || linkedIds.some((id) => !mediaIds.includes(id))) {
+    if (
+      linkedIds.length !== mediaIds.length ||
+      linkedIds.some((id, index) => id !== mediaIds[index])
+    ) {
       return NextResponse.json({ error: "草稿照片尚未同步完成。" }, { status: 409 });
     }
     const linkedViewerIds = linkedViewers.map((viewer) => viewer.id);
@@ -188,6 +209,10 @@ export async function POST(request: Request) {
       );
     }
   }
+  const photoLayout = normalizePhotoLayout(
+    persistedDraftLayout ?? parsed.data.photoLayout,
+    mediaRatios,
+  );
 
   const id = randomUUID();
   const mediaRows = mediaIds.length
@@ -231,6 +256,7 @@ export async function POST(request: Request) {
       body: parsed.data.body,
       visibility: circleId ? "private" : parsed.data.visibility,
       managementMode: circleId ? parsed.data.managementMode : "creator",
+      photoLayout,
       publicationStatus,
       publishedAt: publicationStatus === "published" ? now : null,
     });

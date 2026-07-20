@@ -134,6 +134,13 @@
       "when": 1784557173956,
       "tag": "0018_confused_doomsday",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784570544834,
+      "tag": "0019_sticky_meteorite",
+      "breakpoints": true
     }
   ]
 }

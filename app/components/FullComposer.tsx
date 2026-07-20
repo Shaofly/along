@@ -1,18 +1,17 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element -- Draft media and local previews require authenticated or object URLs. */
-
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { DissolveTextarea } from "@/app/components/DissolveField";
-import { ModalSurface } from "@/app/components/ModalSurface";
 import {
-  appendUniqueFiles,
-  uploadMediaFiles,
-  type UploadProgress,
-} from "@/app/components/media-upload";
+  ComposerPhotoBoard,
+  createComposerPhoto,
+  type ComposerPhoto,
+} from "@/app/components/ComposerPhotoBoard";
+import { ModalSurface } from "@/app/components/ModalSurface";
+import { uploadMediaFiles, type UploadProgress } from "@/app/components/media-upload";
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
 import { TextStateSwap } from "@/app/components/TextStateSwap";
 import { useTaskRouteTransition } from "@/app/components/TaskRouteTransition";
@@ -23,6 +22,11 @@ import type {
   FriendSummary,
   PostVisibility,
 } from "@/lib/content-types";
+import {
+  createPhotoLayoutOptions,
+  type PhotoLayoutSpec,
+  normalizePhotoLayout,
+} from "@/lib/photo-layout";
 
 const visibilityOptions = [
   { value: "friends", label: "朋友" },
@@ -42,8 +46,28 @@ export type ComposerTarget =
 type PersistResult = {
   id: string | null;
   media: DraftMedia[];
+  photoLayout: PhotoLayoutSpec | null;
   updatedAt: string | null;
 };
+
+function draftMediaToPhoto(media: DraftMedia): ComposerPhoto {
+  return {
+    key: `media:${media.id}`,
+    id: media.id,
+    originalName: media.originalName,
+    mimeType: media.mimeType,
+    src: `/api/media/${media.id}/thumbnail`,
+    width: media.width,
+    height: media.height,
+  };
+}
+
+function layoutOptions(photos: ComposerPhoto[], preferred?: PhotoLayoutSpec | null) {
+  return createPhotoLayoutOptions(
+    photos.map((photo) => photo.width / photo.height),
+    preferred,
+  );
+}
 
 function contentSignature(input: {
   body: string;
@@ -51,6 +75,8 @@ function contentSignature(input: {
   managementMode: "creator" | "circle";
   media: DraftMedia[];
   participantIds: string[];
+  photoLayout?: PhotoLayoutSpec | null;
+  photoOrder?: string[];
   viewerIds: string[];
   visibility: PostVisibility;
 }) {
@@ -64,6 +90,8 @@ function contentSignature(input: {
     managementMode: input.managementMode,
     mediaIds: input.media.map((media) => media.id),
     participantIds: [...input.participantIds].sort(),
+    photoLayout: input.photoLayout ?? null,
+    photoOrder: input.photoOrder ?? [],
     viewerIds: [...input.viewerIds].sort(),
     visibility: input.visibility,
   });
@@ -97,9 +125,17 @@ export function FullComposer({
   const router = useRouter();
   const leaveTaskRoute = useTaskRouteTransition();
   const [body, setBody] = useState(initialDraft?.body ?? "");
-  const [files, setFiles] = useState<File[]>([]);
-  const [savedMedia, setSavedMedia] = useState<DraftMedia[]>(
-    initialDraft?.media ?? [],
+  const [photos, setPhotos] = useState<ComposerPhoto[]>(() =>
+    (initialDraft?.media ?? []).map(draftMediaToPhoto),
+  );
+  const [layoutCandidates, setLayoutCandidates] = useState<PhotoLayoutSpec[]>(() =>
+    layoutOptions(
+      (initialDraft?.media ?? []).map(draftMediaToPhoto),
+      initialDraft?.photoLayout,
+    ),
+  );
+  const [photoLayout, setPhotoLayout] = useState<PhotoLayoutSpec | null>(
+    () => layoutCandidates[0] ?? null,
   );
   const [draftId, setDraftId] = useState<string | null>(
     initialDraft?.id ?? null,
@@ -140,6 +176,8 @@ export function FullComposer({
       files: [],
       managementMode: initialDraft?.managementMode ?? "creator",
       media: initialDraft?.media ?? [],
+      photoLayout: initialDraft?.photoLayout,
+      photoOrder: (initialDraft?.media ?? []).map((media) => `media:${media.id}`),
       participantIds:
         target.kind === "circle"
           ? [
@@ -155,15 +193,29 @@ export function FullComposer({
       visibility: initialDraft?.visibility ?? "friends",
     }),
   );
-  const previews = useMemo(
-    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
-    [files],
+  const files = photos.flatMap((photo) => (photo.file ? [photo.file] : []));
+  const savedMedia: DraftMedia[] = photos.flatMap((photo) =>
+    photo.id
+      ? [{
+          id: photo.id,
+          originalName: photo.originalName,
+          mimeType: photo.mimeType,
+          width: photo.width,
+          height: photo.height,
+        }]
+      : [],
   );
-  useEffect(
-    () => () =>
-      previews.forEach((preview) => URL.revokeObjectURL(preview.url)),
-    [previews],
-  );
+  const photosRef = useRef(photos);
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+  useEffect(() => {
+    return () => {
+      photosRef.current.forEach((photo) => {
+        if (photo.file) URL.revokeObjectURL(photo.src);
+      });
+    };
+  }, []);
 
   const selectableParticipants = useMemo(() => {
     const people = new Map<string, DraftParticipant>();
@@ -189,6 +241,12 @@ export function FullComposer({
     files,
     managementMode,
     media: savedMedia,
+    photoLayout,
+    photoOrder: photos.map((photo) =>
+      photo.id
+        ? `media:${photo.id}`
+        : `file:${photo.file!.name}:${photo.file!.size}:${photo.file!.lastModified}`,
+    ),
     participantIds,
     viewerIds,
     visibility,
@@ -217,19 +275,65 @@ export function FullComposer({
     closeNow();
   }
 
-  function chooseFiles(selected: FileList | null) {
-    const result = appendUniqueFiles(
-      files,
-      selected,
-      Math.max(0, 20 - savedMedia.length),
+  async function chooseFiles(selected: FileList | null) {
+    if (!selected) return;
+    const existing = new Set(
+      photos.flatMap((photo) =>
+        photo.file
+          ? [`${photo.file.name}:${photo.file.size}:${photo.file.lastModified}`]
+          : [],
+      ),
     );
-    setFiles(result.files);
+    const accepted: File[] = [];
+    let omitted = 0;
+    for (const file of Array.from(selected)) {
+      const key = `${file.name}:${file.size}:${file.lastModified}`;
+      if (existing.has(key) || photos.length + accepted.length >= 20) {
+        omitted += 1;
+      } else {
+        existing.add(key);
+        accepted.push(file);
+      }
+    }
+    const created = await Promise.all(accepted.map(createComposerPhoto));
+    const nextPhotos = [...photos, ...created];
+    const candidates = layoutOptions(nextPhotos);
+    setPhotos(nextPhotos);
+    setLayoutCandidates(candidates);
+    setPhotoLayout(candidates[0] ?? null);
     setError(
-      result.omitted
+      omitted
         ? "已忽略重复图片，或已达到每条动态 20 张的上限。"
         : "",
     );
     setNotice("");
+  }
+
+  function removePhoto(index: number) {
+    const removed = photos[index];
+    if (removed?.file) URL.revokeObjectURL(removed.src);
+    const nextPhotos = photos.filter((_, photoIndex) => photoIndex !== index);
+    const candidates = layoutOptions(nextPhotos);
+    setPhotos(nextPhotos);
+    setLayoutCandidates(candidates);
+    setPhotoLayout(candidates[0] ?? null);
+  }
+
+  function movePhoto(from: number, to: number) {
+    setPhotos((current) => {
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }
+
+  function cycleLayout() {
+    if (layoutCandidates.length < 2) return;
+    const currentIndex = layoutCandidates.findIndex(
+      (candidate) => JSON.stringify(candidate) === JSON.stringify(photoLayout),
+    );
+    setPhotoLayout(layoutCandidates[(currentIndex + 1) % layoutCandidates.length]);
   }
 
   function chooseVisibility(nextVisibility: PostVisibility) {
@@ -238,18 +342,39 @@ export function FullComposer({
   }
 
   async function uploadPendingFiles() {
-    if (!files.length) return savedMedia;
+    if (!files.length) return { media: savedMedia, layout: photoLayout };
     setUploadProgress({ percent: 0, phase: "uploading" });
     const uploaded = await uploadMediaFiles(files, setUploadProgress);
-    const nextMedia = [...savedMedia, ...uploaded];
-    setSavedMedia(nextMedia);
-    setFiles([]);
+    let uploadedIndex = 0;
+    const nextPhotos = photos.map((photo) => {
+      if (!photo.file) return photo;
+      const media = uploaded[uploadedIndex++];
+      URL.revokeObjectURL(photo.src);
+      return draftMediaToPhoto(media);
+    });
+    const nextLayout = normalizePhotoLayout(
+      photoLayout,
+      nextPhotos.map((photo) => photo.width / photo.height),
+    );
+    setPhotos(nextPhotos);
+    setPhotoLayout(nextLayout);
+    setLayoutCandidates(layoutOptions(nextPhotos, nextLayout));
     setUploadProgress(null);
-    return nextMedia;
+    return {
+      media: nextPhotos.map((photo) => ({
+        id: photo.id!,
+        originalName: photo.originalName,
+        mimeType: photo.mimeType,
+        width: photo.width,
+        height: photo.height,
+      })),
+      layout: nextLayout,
+    };
   }
 
   async function persistDraft(): Promise<PersistResult> {
-    const nextMedia = await uploadPendingFiles();
+    const uploadedState = await uploadPendingFiles();
+    const nextMedia = uploadedState.media;
     const response = await fetch(
       draftId ? `/api/drafts/${draftId}` : "/api/drafts",
       {
@@ -267,6 +392,7 @@ export function FullComposer({
           participantIds:
             target.kind === "circle" ? participantIds : [],
           mediaIds: nextMedia.map((media) => media.id),
+          photoLayout: uploadedState.layout,
           expectedUpdatedAt: draftId ? draftUpdatedAt ?? undefined : undefined,
         }),
       },
@@ -276,6 +402,7 @@ export function FullComposer({
       error?: string;
       id?: string | null;
       updatedAt?: string | null;
+      photoLayout?: PhotoLayoutSpec | null;
     };
     if (!response.ok) {
       if (result.code === "draft_conflict") setConflictDialogOpen(true);
@@ -283,20 +410,29 @@ export function FullComposer({
     }
     const nextId = result.id ?? null;
     const nextUpdatedAt = result.updatedAt ?? null;
+    const nextLayout = result.photoLayout ?? uploadedState.layout;
     setDraftId(nextId);
     setDraftUpdatedAt(nextUpdatedAt);
+    setPhotoLayout(nextLayout);
     setBaseline(
       contentSignature({
         body,
         files: [],
         managementMode,
         media: nextMedia,
+        photoLayout: nextLayout,
+        photoOrder: nextMedia.map((media) => `media:${media.id}`),
         participantIds,
         viewerIds,
         visibility,
       }),
     );
-    return { id: nextId, media: nextMedia, updatedAt: nextUpdatedAt };
+    return {
+      id: nextId,
+      media: nextMedia,
+      photoLayout: nextLayout,
+      updatedAt: nextUpdatedAt,
+    };
   }
 
   async function saveOnly() {
@@ -379,6 +515,7 @@ export function FullComposer({
           participantIds:
             target.kind === "circle" ? participantIds : [],
           mediaIds: persisted.media.map((media) => media.id),
+          photoLayout: persisted.photoLayout,
           draftId: persisted.id,
         }),
       });
@@ -418,8 +555,11 @@ export function FullComposer({
       }
       const draft = result.draft;
       setBody(draft.body);
-      setFiles([]);
-      setSavedMedia(draft.media);
+      const nextPhotos = draft.media.map(draftMediaToPhoto);
+      const nextLayouts = layoutOptions(nextPhotos, draft.photoLayout);
+      setPhotos(nextPhotos);
+      setLayoutCandidates(nextLayouts);
+      setPhotoLayout(nextLayouts[0] ?? null);
       setVisibility(draft.visibility);
       setViewerIds(draft.viewerIds);
       setManagementMode(draft.managementMode);
@@ -440,6 +580,8 @@ export function FullComposer({
           files: [],
           managementMode: draft.managementMode,
           media: draft.media,
+          photoLayout: draft.photoLayout,
+          photoOrder: draft.media.map((media) => `media:${media.id}`),
           participantIds:
             target.kind === "circle"
               ? [
@@ -486,27 +628,35 @@ export function FullComposer({
           participantIds:
             target.kind === "circle" ? participantIds : [],
           mediaIds: savedMedia.map((media) => media.id),
+          photoLayout,
         }),
       });
       const result = (await response.json()) as {
         error?: string;
         id?: string | null;
         media?: DraftMedia[];
+        photoLayout?: PhotoLayoutSpec | null;
         updatedAt?: string | null;
       };
       if (!response.ok || !result.id || !result.updatedAt) {
         throw new Error(result.error ?? "另存草稿失败。");
       }
       const nextMedia = result.media ?? [];
+      const nextPhotos = nextMedia.map(draftMediaToPhoto);
+      const nextLayouts = layoutOptions(nextPhotos, result.photoLayout ?? photoLayout);
       setDraftId(result.id);
       setDraftUpdatedAt(result.updatedAt);
-      setSavedMedia(nextMedia);
+      setPhotos(nextPhotos);
+      setLayoutCandidates(nextLayouts);
+      setPhotoLayout(nextLayouts[0] ?? null);
       setBaseline(
         contentSignature({
           body,
           files: [],
           managementMode,
           media: nextMedia,
+          photoLayout: nextLayouts[0] ?? null,
+          photoOrder: nextMedia.map((media) => `media:${media.id}`),
           participantIds,
           viewerIds,
           visibility,
@@ -550,6 +700,7 @@ export function FullComposer({
         </button>
       </header>
 
+      <div className="full-composer-scroll" data-modal-scroll-root>
       {initialDraft?.unavailableReason ? (
         <div className="composer-availability-note">
           {initialDraft.unavailableReason}
@@ -573,48 +724,14 @@ export function FullComposer({
         wrapperClassName="composer-writing-surface"
       />
 
-      {savedMedia.length || previews.length ? (
-        <div className="upload-previews">
-          {savedMedia.map((media, index) => (
-            <figure key={media.id}>
-              <img
-                alt={media.originalName}
-                src={`/api/media/${media.id}/thumbnail`}
-              />
-              <button
-                aria-label={`移除图片 ${media.originalName}`}
-                className="remove-preview"
-                onClick={() =>
-                  setSavedMedia((current) =>
-                    current.filter((_, mediaIndex) => mediaIndex !== index),
-                  )
-                }
-                type="button"
-              >
-                <span aria-hidden="true">×</span>
-              </button>
-            </figure>
-          ))}
-          {previews.map((preview, index) => (
-            <figure
-              key={`${preview.file.name}-${preview.file.lastModified}-${index}`}
-            >
-              <img alt="待发布预览" src={preview.url} />
-              <button
-                aria-label={`移除图片 ${preview.file.name}`}
-                className="remove-preview"
-                onClick={() =>
-                  setFiles((current) =>
-                    current.filter((_, fileIndex) => fileIndex !== index),
-                  )
-                }
-                type="button"
-              >
-                <span aria-hidden="true">×</span>
-              </button>
-            </figure>
-          ))}
-        </div>
+      {photos.length ? (
+        <ComposerPhotoBoard
+          layout={photoLayout}
+          onCycleLayout={cycleLayout}
+          onMove={movePhoto}
+          onRemove={removePhoto}
+          photos={photos}
+        />
       ) : null}
 
       {target.kind === "personal" ? (
@@ -697,6 +814,7 @@ export function FullComposer({
 
       {error ? <p className="composer-error">{error}</p> : null}
       {notice ? <p className="composer-notice">{notice}</p> : null}
+      </div>
 
       <div className="full-composer-actions">
         <label className="photo-input">

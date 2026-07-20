@@ -24,6 +24,8 @@ export async function POST(request: Request) {
       name: media.originalName,
       mimeType: media.mimeType,
       status: media.status,
+      width: media.sourceWidth,
+      height: media.sourceHeight,
       urls: {
         thumbnail: `/api/media/${media.id}/thumbnail`,
         preview: `/api/media/${media.id}/preview`,

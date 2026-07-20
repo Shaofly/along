@@ -53,8 +53,11 @@ export class LocalSharpProcessor implements ImageProcessor<Buffer, BufferedVaria
       failOn: "error",
       limitInputPixels: MAX_INPUT_PIXELS,
     }).metadata();
-    const width = requiredDimension(metadata.width, "宽度");
-    const height = requiredDimension(metadata.height, "高度");
+    const rawWidth = requiredDimension(metadata.width, "宽度");
+    const rawHeight = requiredDimension(metadata.height, "高度");
+    const swapsAxes = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
+    const width = swapsAxes ? rawHeight : rawWidth;
+    const height = swapsAxes ? rawWidth : rawHeight;
     const format = metadata.format;
     const mimeType = format === "jpeg" ? "image/jpeg" : `image/${format ?? "unknown"}`;
     return { mimeType, width, height, hasAlpha: Boolean(metadata.hasAlpha) };

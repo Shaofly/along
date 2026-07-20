@@ -14,12 +14,14 @@ import {
   postViewers,
 } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import { photoLayoutSchema } from "@/lib/draft-contracts";
 import {
   assertActiveCircleMutation,
   getActiveCircleMembership,
 } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
 import { deleteMediaAsset } from "@/lib/media/service";
+import { normalizePhotoLayout } from "@/lib/photo-layout";
 
 const editPostSchema = z.object({
   body: z.string().trim().max(5000, "正文不能超过 5000 个字"),
@@ -27,6 +29,8 @@ const editPostSchema = z.object({
   viewerIds: z.array(z.string()).max(100).default([]),
   participantIds: z.array(z.string()).max(10).optional(),
   managementMode: z.enum(["creator", "circle"]).optional(),
+  mediaIds: z.array(z.string()).max(20).optional(),
+  photoLayout: photoLayoutSchema.nullable().optional(),
   expectedUpdatedAt: z.string().datetime(),
 });
 
@@ -184,6 +188,7 @@ export async function PATCH(
           authorId: posts.authorId,
           circleId: posts.circleId,
           managementMode: posts.managementMode,
+          photoLayout: posts.photoLayout,
           updatedAt: posts.updatedAt,
         })
         .from(posts)
@@ -212,12 +217,17 @@ export async function PATCH(
         );
       }
 
-      const [image] = await transaction
-        .select({ id: postMedia.mediaId })
+      const existingMedia = await transaction
+        .select({
+          id: postMedia.mediaId,
+          width: mediaAssets.sourceWidth,
+          height: mediaAssets.sourceHeight,
+        })
         .from(postMedia)
+        .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
         .where(eq(postMedia.postId, id))
-        .limit(1);
-      if (!parsed.data.body && !image) {
+        .orderBy(postMedia.position);
+      if (!parsed.data.body && existingMedia.length === 0) {
         throw new PostMutationError(
           "invalid_content",
           "动态内容不能为空。",
@@ -225,6 +235,29 @@ export async function PATCH(
           false,
         );
       }
+      const existingMediaIds = existingMedia.map((media) => media.id);
+      const nextMediaIds = parsed.data.mediaIds ?? existingMediaIds;
+      const nextMediaIdSet = new Set(nextMediaIds);
+      if (
+        nextMediaIds.length !== existingMediaIds.length ||
+        nextMediaIdSet.size !== nextMediaIds.length ||
+        existingMediaIds.some((mediaId) => !nextMediaIdSet.has(mediaId))
+      ) {
+        throw new PostMutationError(
+          "invalid_content",
+          "已发布照片只能调整顺序，不能增加或删除。",
+          400,
+          false,
+        );
+      }
+      const mediaById = new Map(existingMedia.map((media) => [media.id, media]));
+      const nextPhotoLayout = normalizePhotoLayout(
+        parsed.data.photoLayout ?? lockedPost.photoLayout,
+        nextMediaIds.map((mediaId) => {
+          const media = mediaById.get(mediaId);
+          return (media?.width ?? 1) / (media?.height ?? 1);
+        }),
+      );
 
       let nextManagementMode = lockedPost.managementMode;
       if (lockedPost.circleId && parsed.data.managementMode) {
@@ -305,6 +338,7 @@ export async function PATCH(
           body: parsed.data.body,
           visibility: lockedCircleId ? "private" : nextVisibility,
           managementMode: nextManagementMode,
+          photoLayout: nextPhotoLayout,
           lastEditedById: session.user.id,
           updatedAt: nextUpdatedAt,
         })
@@ -322,6 +356,19 @@ export async function PATCH(
         );
       }
       savedUpdatedAt = updated[0]!.updatedAt;
+
+      if (parsed.data.mediaIds) {
+        await transaction.delete(postMedia).where(eq(postMedia.postId, id));
+        if (nextMediaIds.length) {
+          await transaction.insert(postMedia).values(
+            nextMediaIds.map((mediaId, position) => ({
+              postId: id,
+              mediaId,
+              position,
+            })),
+          );
+        }
+      }
 
       await transaction.delete(postViewers).where(eq(postViewers.postId, id));
       if (!lockedCircleId && nextVisibility === "selected") {

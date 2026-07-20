@@ -5725,10 +5725,12 @@ a {
 .full-composer {
   background: var(--paper);
   display: grid;
-  gap: 18px;
-  max-height: 92vh;
-  overflow-y: auto;
-  padding: clamp(20px, 4vw, 34px);
+  gap: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100dvh - 36px);
+  max-height: min(92vh, calc(100dvh - 36px));
+  overflow: hidden;
+  padding: 0;
   width: 100%;
 }
 
@@ -5749,6 +5751,7 @@ a {
   align-items: center;
   display: flex;
   justify-content: space-between;
+  padding: 28px 34px 18px;
 }
 
 .full-composer > header > div {
@@ -5807,10 +5810,29 @@ a {
   color: var(--ink);
   font-size: 17px;
   line-height: 1.8;
-  min-height: 180px;
+  min-height: 116px;
   outline: 0;
   resize: vertical;
   width: 100%;
+}
+
+.full-composer-scroll {
+  align-content: start;
+  display: grid;
+  gap: 18px;
+  grid-auto-rows: max-content;
+  max-height: calc(92vh - 180px);
+  max-height: calc(92dvh - 180px);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 34px 22px;
+  scrollbar-gutter: stable;
+}
+
+.full-composer .composer-writing-surface {
+  margin-bottom: 0;
+  min-height: 116px;
 }
 
 .full-composer-setting {
@@ -5850,7 +5872,280 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding-top: 15px;
+  padding: 16px 34px 24px;
+}
+
+.photo-mosaic-host {
+  max-width: 100%;
+  position: relative;
+  transition: height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  width: 100%;
+}
+
+.photo-mosaic-tile {
+  background: rgba(232, 228, 217, 0.72);
+  border: 0;
+  border-radius: 10px;
+  cursor: default;
+  display: block;
+  overflow: visible;
+  padding: 0;
+  position: absolute;
+  transition:
+    left 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.post-gallery .photo-mosaic-tile {
+  cursor: zoom-in;
+}
+
+.photo-mosaic-image,
+.photo-mosaic-stack-back {
+  background: rgba(232, 228, 217, 0.72);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  position: relative;
+  width: 100%;
+  z-index: 2;
+}
+
+.photo-mosaic-stack-back {
+  inset: 0;
+  position: absolute;
+  z-index: 0;
+}
+
+.photo-mosaic-stack-back--near {
+  transform: rotate(2.5deg) translate(4px, 3px);
+}
+
+.photo-mosaic-stack-back--far {
+  transform: rotate(4.5deg) translate(7px, 5px);
+}
+
+.photo-mosaic-more {
+  align-items: center;
+  background: rgba(24, 31, 28, 0.5);
+  border-radius: inherit;
+  color: #fff;
+  display: flex;
+  font-size: clamp(18px, 4vw, 28px);
+  font-weight: 700;
+  inset: 0;
+  justify-content: center;
+  letter-spacing: 0.02em;
+  position: absolute;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.32);
+  z-index: 3;
+}
+
+.composer-photo-board {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 208px minmax(0, 1fr);
+}
+
+.composer-photo-order,
+.composer-photo-final {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.composer-photo-section-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 11px;
+}
+
+.composer-photo-section-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-photo-section-heading strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.composer-photo-section-heading span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.composer-photo-section-heading > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--mint-deep);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  gap: 4px;
+  padding: 4px 5px;
+}
+
+.composer-photo-section-heading > button:hover {
+  background: rgba(79, 128, 105, 0.09);
+}
+
+.composer-photo-thumbnails {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.composer-photo-thumbnails figure {
+  aspect-ratio: 1;
+  background: rgba(222, 218, 207, 0.8);
+  border: 0;
+  border-radius: 9px;
+  cursor: grab;
+  margin: 0;
+  outline: 0;
+  overflow: hidden;
+  position: relative;
+  touch-action: none;
+  transition:
+    box-shadow 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.composer-photo-thumbnails figure:focus-visible {
+  box-shadow: 0 0 0 3px rgba(79, 128, 105, 0.22);
+}
+
+.composer-photo-thumbnails figure.is-dragging {
+  cursor: grabbing;
+  opacity: 0.68;
+  transform: scale(0.96);
+}
+
+.composer-photo-thumbnails img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  width: 100%;
+}
+
+.composer-photo-index {
+  align-items: center;
+  background: rgba(25, 34, 30, 0.68);
+  border-radius: 999px;
+  bottom: 4px;
+  color: #fff;
+  display: flex;
+  font-size: 9px;
+  height: 17px;
+  justify-content: center;
+  left: 4px;
+  min-width: 17px;
+  padding: 0 4px;
+  position: absolute;
+}
+
+.composer-photo-thumbnails .remove-preview {
+  align-items: center;
+  background: rgba(252, 250, 245, 0.92);
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  height: 20px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 20px;
+}
+
+.composer-photo-final {
+  overflow: hidden;
+}
+
+.post-editor-photo-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.post-editor-photo-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.composer-photo-mosaic {
+  margin: 0 auto;
+}
+
+.post-gallery {
+  columns: auto;
+  grid-column: 1 / -1;
+  margin-top: 0;
+  max-width: 680px;
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-mosaic-tile {
+    transition: none;
+  }
+
+  .photo-mosaic-host {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .full-composer--page {
+    max-height: none;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .full-composer > header {
+    padding: 16px 18px 12px;
+  }
+
+  .full-composer--page .full-composer-scroll {
+    max-height: none;
+    overflow: visible;
+    padding: 0 18px 112px;
+    scrollbar-gutter: auto;
+  }
+
+  .full-composer--page .full-composer-actions {
+    background: color-mix(in srgb, var(--paper) 94%, transparent);
+    bottom: 0;
+    padding: 12px 18px max(14px, env(safe-area-inset-bottom));
+    position: sticky;
+    z-index: 6;
+  }
+
+  .composer-photo-board {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-photo-thumbnails {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .full-composer-actions > span {

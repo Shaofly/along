@@ -1,11 +1,13 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element -- Existing media uses authenticated routes. */
-
 import { FormEvent, useMemo, useState } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 
+import {
+  ComposerPhotoBoard,
+  type ComposerPhoto,
+} from "@/app/components/ComposerPhotoBoard";
 import { DissolveTextarea } from "@/app/components/DissolveField";
 import { ModalSurface } from "@/app/components/ModalSurface";
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
@@ -16,12 +18,29 @@ import type {
   FriendSummary,
   PostVisibility,
 } from "@/lib/content-types";
+import {
+  createPhotoLayoutOptions,
+  normalizePhotoLayout,
+  type PhotoLayoutSpec,
+} from "@/lib/photo-layout";
 
 const visibilityOptions = [
   { value: "friends", label: "朋友" },
   { value: "selected", label: "指定朋友" },
   { value: "private", label: "仅自己" },
 ] as const;
+
+function postMediaToPhoto(media: FeedPost["media"][number]): ComposerPhoto {
+  return {
+    key: media.id,
+    id: media.id,
+    originalName: media.originalName,
+    mimeType: media.mimeType,
+    src: `/api/media/${media.id}/thumbnail`,
+    width: media.width,
+    height: media.height,
+  };
+}
 
 export function PostEditor({
   friends,
@@ -47,11 +66,36 @@ export function PostEditor({
   const [viewerIds, setViewerIds] = useState(post.viewerIds);
   const [managementMode, setManagementMode] = useState(post.managementMode);
   const [participantIds, setParticipantIds] = useState(post.participantIds);
+  const [photos, setPhotos] = useState<ComposerPhoto[]>(() =>
+    post.media.map(postMediaToPhoto),
+  );
+  const [layoutCandidates, setLayoutCandidates] = useState<PhotoLayoutSpec[]>(
+    () =>
+      createPhotoLayoutOptions(
+        post.media.map((media) => media.width / media.height),
+        post.photoLayout,
+      ),
+  );
+  const [photoLayout, setPhotoLayout] = useState<PhotoLayoutSpec | null>(
+    () =>
+      createPhotoLayoutOptions(
+        post.media.map((media) => media.width / media.height),
+        post.photoLayout,
+      )[0] ?? null,
+  );
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [terminalConflict, setTerminalConflict] = useState("");
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const initialPhotoLayout = useMemo(
+    () =>
+      normalizePhotoLayout(
+        post.photoLayout,
+        post.media.map((media) => media.width / media.height),
+      ),
+    [post.media, post.photoLayout],
+  );
   const participants = (() => {
     const people = new Map<string, DraftParticipant>();
     for (const participant of post.participants) {
@@ -71,30 +115,61 @@ export function PostEditor({
       JSON.stringify({
         body,
         managementMode,
+        mediaIds: photos.map((photo) => photo.id!),
         participantIds: [...participantIds].sort(),
+        photoLayout,
         viewerIds: [...viewerIds].sort(),
         visibility,
       }) !==
       JSON.stringify({
         body: post.body,
         managementMode: post.managementMode,
+        mediaIds: post.media.map((media) => media.id),
         participantIds: [...post.participantIds].sort(),
+        photoLayout: initialPhotoLayout,
         viewerIds: [...post.viewerIds].sort(),
         visibility: post.visibility,
       }),
     [
       body,
+      initialPhotoLayout,
       managementMode,
       participantIds,
+      photoLayout,
       post.body,
       post.managementMode,
+      post.media,
       post.participantIds,
       post.viewerIds,
       post.visibility,
+      photos,
       viewerIds,
       visibility,
     ],
   );
+
+  function movePhoto(from: number, to: number) {
+    setPhotos((current) => {
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      const nextLayouts = createPhotoLayoutOptions(
+        next.map((photo) => photo.width / photo.height),
+        photoLayout,
+      );
+      setLayoutCandidates(nextLayouts);
+      setPhotoLayout(nextLayouts[0] ?? null);
+      return next;
+    });
+  }
+
+  function cycleLayout() {
+    if (layoutCandidates.length < 2) return;
+    const currentIndex = layoutCandidates.findIndex(
+      (candidate) => JSON.stringify(candidate) === JSON.stringify(photoLayout),
+    );
+    setPhotoLayout(layoutCandidates[(currentIndex + 1) % layoutCandidates.length]);
+  }
 
   function closeNow() {
     setCloseDialogOpen(false);
@@ -130,6 +205,8 @@ export function PostEditor({
           viewerIds: visibility === "selected" ? viewerIds : [],
           managementMode: post.circle ? managementMode : undefined,
           participantIds: post.circle ? participantIds : undefined,
+          mediaIds: photos.map((photo) => photo.id!),
+          photoLayout,
           expectedUpdatedAt: post.updatedAt,
         }),
       });
@@ -180,6 +257,7 @@ export function PostEditor({
           )}
         </button>
       </header>
+      <div className="full-composer-scroll" data-modal-scroll-root>
       <DissolveTextarea
         aria-label="动态正文"
         data-modal-initial-focus
@@ -189,19 +267,18 @@ export function PostEditor({
         value={body}
         wrapperClassName="composer-writing-surface"
       />
-      {post.media.length ? (
-        <div className="post-editor-existing-media">
-          <div className="upload-previews">
-            {post.media.map((media) => (
-              <figure key={media.id}>
-                <img
-                  alt={media.originalName}
-                  src={`/api/media/${media.id}/thumbnail`}
-                />
-              </figure>
-            ))}
-          </div>
-          <small>本次可以修改正文和发布设置；已发布照片暂不支持增删。</small>
+      {photos.length ? (
+        <div className="post-editor-photo-group">
+          <ComposerPhotoBoard
+            layout={photoLayout}
+            onCycleLayout={cycleLayout}
+            onMove={movePhoto}
+            orderHint="拖动或使用方向键调整先后"
+            photos={photos}
+          />
+          <small className="post-editor-photo-note">
+            可以调整照片顺序和排法；已发布照片暂不支持增删。
+          </small>
         </div>
       ) : null}
       {!post.circle ? (
@@ -297,6 +374,7 @@ export function PostEditor({
           当前修改已不能保存。你仍可以继续输入或复制内容，完成后请取消修改。
         </p>
       ) : null}
+      </div>
       <div className="full-composer-actions">
         <span>保存时会重新检查动态和圈子状态。</span>
         <button
@@ -343,7 +421,7 @@ export function PostEditor({
       >
         <div className="draft-dialog">
           <h2 id="post-editor-close-title">要放弃这次修改吗？</h2>
-          <p>尚未保存的正文和发布设置会丢失。</p>
+          <p>尚未保存的正文、照片排布和发布设置会丢失。</p>
           <div className="draft-dialog-actions">
             <button
               className="draft-danger-action"

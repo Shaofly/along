@@ -14,6 +14,10 @@ import {
   postMedia,
 } from "@/db/schema";
 import type { PostVisibility } from "@/lib/content-types";
+import {
+  normalizePhotoLayout,
+  type PhotoLayoutSpec,
+} from "@/lib/photo-layout";
 import { assertActiveCircleMutation } from "@/lib/circles";
 import { deleteDraftWithAssets } from "@/lib/drafts";
 import { getFriends } from "@/lib/invitations";
@@ -31,6 +35,7 @@ export type SaveDraftInput = {
   viewerIds: string[];
   participantIds: string[];
   mediaIds: string[];
+  photoLayout?: PhotoLayoutSpec | null;
   expectedUpdatedAt?: string;
 };
 
@@ -61,6 +66,7 @@ export async function saveDraft(
   const requestedParticipantIds = requestedCircleId
     ? [...new Set([authorId, ...input.participantIds])]
     : [];
+  let mediaRatios: number[] = [];
   if (!input.body.trim() && mediaIds.length === 0) {
     if (input.id) await deleteDraftWithAssets(authorId, input.id);
     return { id: null, updatedAt: null };
@@ -139,7 +145,12 @@ export async function saveDraft(
   if (mediaIds.length) {
     const [ownedMedia, publishedLinks, draftLinks] = await Promise.all([
       db
-        .select({ id: mediaAssets.id, status: mediaAssets.status })
+        .select({
+          id: mediaAssets.id,
+          status: mediaAssets.status,
+          width: mediaAssets.sourceWidth,
+          height: mediaAssets.sourceHeight,
+        })
         .from(mediaAssets)
         .where(
           and(
@@ -170,7 +181,13 @@ export async function saveDraft(
         "invalid_media",
       );
     }
+    const mediaById = new Map(ownedMedia.map((media) => [media.id, media]));
+    mediaRatios = mediaIds.map((mediaId) => {
+      const media = mediaById.get(mediaId);
+      return (media?.width ?? 1) / (media?.height ?? 1);
+    });
   }
+  const photoLayout = normalizePhotoLayout(input.photoLayout, mediaRatios);
 
   const id = existing?.id ?? randomUUID();
   const removedMedia = previousMedia.filter(
@@ -266,6 +283,7 @@ export async function saveDraft(
           body: input.body.trim(),
           visibility: requestedCircleId ? "private" : input.visibility,
           managementMode: requestedCircleId ? input.managementMode : "creator",
+          photoLayout,
           updatedAt: nextUpdatedAt,
         })
         .where(eq(drafts.id, id));
@@ -284,6 +302,7 @@ export async function saveDraft(
         circleId: requestedCircleId,
         visibility: requestedCircleId ? "private" : input.visibility,
         managementMode: requestedCircleId ? input.managementMode : "creator",
+        photoLayout,
         createdAt: nextUpdatedAt,
         updatedAt: nextUpdatedAt,
       });
@@ -320,6 +339,7 @@ export async function saveDraft(
   return {
     id,
     updatedAt: savedUpdatedAt!.toISOString(),
+    photoLayout,
   };
 }
 
@@ -360,6 +380,8 @@ export async function forkDraft(
           id: mediaAssets.id,
           originalName: mediaAssets.originalName,
           mimeType: mediaAssets.mimeType,
+          width: mediaAssets.sourceWidth,
+          height: mediaAssets.sourceHeight,
         })
         .from(draftMedia)
         .innerJoin(mediaAssets, eq(draftMedia.mediaId, mediaAssets.id))
@@ -414,6 +436,8 @@ export async function forkDraft(
             id: mediaAssets.id,
             originalName: mediaAssets.originalName,
             mimeType: mediaAssets.mimeType,
+            width: mediaAssets.sourceWidth,
+            height: mediaAssets.sourceHeight,
           })
           .from(mediaAssets)
           .where(inArray(mediaAssets.id, nextMediaIds))
@@ -423,7 +447,14 @@ export async function forkDraft(
     );
     return {
       ...result,
-      media: nextMediaIds.map((mediaId) => nextMediaById.get(mediaId)!),
+      media: nextMediaIds.map((mediaId) => {
+        const media = nextMediaById.get(mediaId)!;
+        return {
+          ...media,
+          width: media.width ?? 1,
+          height: media.height ?? 1,
+        };
+      }),
     };
   } catch (error) {
     await Promise.all(

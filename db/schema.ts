@@ -4,6 +4,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -13,6 +14,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { PhotoLayoutSpec } from "@/lib/photo-layout";
 
 export const userRole = pgEnum("user_role", ["admin", "member"]);
 
@@ -686,6 +688,7 @@ export const posts = pgTable(
       .references(() => user.id),
     circleId: text("circle_id").references(() => circles.id),
     body: text("body").default("").notNull(),
+    photoLayout: jsonb("photo_layout").$type<PhotoLayoutSpec | null>(),
     visibility: postVisibility("visibility").default("friends").notNull(),
     managementMode: circleManagementMode("management_mode")
       .default("creator")
@@ -738,6 +741,7 @@ export const drafts = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     circleId: text("circle_id").references(() => circles.id),
     body: text("body").default("").notNull(),
+    photoLayout: jsonb("photo_layout").$type<PhotoLayoutSpec | null>(),
     visibility: postVisibility("visibility").default("friends").notNull(),
     managementMode: circleManagementMode("management_mode")
       .default("creator")
@@ -839,6 +843,7 @@ export const circleExitSnapshotPosts = pgTable(
       .notNull()
       .references(() => user.id),
     body: text("body").notNull(),
+    photoLayout: jsonb("photo_layout").$type<PhotoLayoutSpec | null>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
     lastEditedById: text("last_edited_by_id").references(() => user.id),

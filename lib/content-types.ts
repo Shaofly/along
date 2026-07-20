@@ -1,3 +1,5 @@
+import type { PhotoLayoutSpec } from "@/lib/photo-layout";
+
 export type PostVisibility = "friends" | "selected" | "private";
 export type ProfileTheme = "sage" | "rose" | "mist" | "apricot" | "ink";
 export type ProfileInfoVisibility = "all" | "selected" | "private";
@@ -7,6 +9,8 @@ export type DraftMedia = {
   id: string;
   originalName: string;
   mimeType: string;
+  width: number;
+  height: number;
 };
 
 export type DraftParticipant = {
@@ -32,6 +36,7 @@ export type DraftSummary = {
   managementMode: "creator" | "circle";
   media: DraftMedia[];
   mediaCount: number;
+  photoLayout: PhotoLayoutSpec | null;
   canPublish: boolean;
   unavailableReason: string | null;
   createdAt: string;
@@ -50,6 +55,7 @@ export type FeedPost = {
   visibility: PostVisibility;
   publicationStatus: "publishing" | "published" | "failed";
   publicationError: string | null;
+  photoLayout: PhotoLayoutSpec | null;
   createdAt: string;
   updatedAt: string;
   author: {
@@ -73,6 +79,8 @@ export type FeedPost = {
     id: string;
     originalName: string;
     mimeType: string;
+    width: number;
+    height: number;
   }>;
   viewerIds: string[];
   participantIds: string[];

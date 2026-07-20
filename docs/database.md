@@ -93,6 +93,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - `media_upload_sessions` 保存 incoming Key、预期类型和大小以及 24 小时过期时间；`media_processing_jobs` 保存处理提供方、尝试次数和失败原因。
 - 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
 - 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。媒体后台结算只改变发布状态，不冒充用户正文编辑或推进正文并发版本。
+- `drafts.photo_layout`、`posts.photo_layout` 和 `circle_exit_snapshot_posts.photo_layout` 保存同一份带版本号的 JSONB 拼贴拓扑。它描述有序叶子的递归横/纵切分或等高行断点，不保存像素坐标；图片顺序仍以 `draft_media.position`、`post_media.position` 和退出档案媒体位置为准。
 - 每条退出档案属于一条持久成员关系，同一关系最多保留一份当前退出档案。
 - 退出档案正文与媒体顺序保存在独立冻结表中；成员构成通过不可变成员周期和`captured_at（档案冻结时间）`重建，不额外保存人物资料快照。
 - 退出档案只引用逻辑媒体，不复制图片字节。媒体仍被动态、草稿或任一退出档案引用时，不允许删除底层资源。

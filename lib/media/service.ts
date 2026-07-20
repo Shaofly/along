@@ -110,6 +110,8 @@ export async function createLocalUpload(file: File, ownerId: string) {
     originalName: file.name,
     mimeType: file.type,
     status: "processing" as const,
+    sourceWidth: source.width,
+    sourceHeight: source.height,
   };
 }
 

@@ -13,6 +13,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
 | 圈子动态与草稿参与者 | `已实现` | `post_participants`、`draft_participants`、完整发布器与发布、编辑接口 | 首页快捷发布器按产品规则不提供参与者选择 |
 | 个人资料、资料隐私与资料媒体 | `已实现` | `user_profile_appearance`、`user_profile_details`、指定查看者与资料接口 | 头像、封面、主题、可选个人信息和关系级裁剪 |
+| 照片顺序与版本化拼贴拓扑 | `已实现` | 媒体关联的`position`与内容、草稿、退出档案的`photo_layout` | 拓扑不保存像素坐标 |
 | 地点与地图表 | `已确认设计` | [地图与地点功能](features/map.md) | 当前 Schema 尚无地点表 |
 | 评论、回应与完整通知 | `未来设想` | 产品规则已有方向 | 当前 Schema 尚无完整数据模型 |
 
@@ -94,6 +95,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 媒体只有 `ready` 状态才必须带 `ready_at`，失败状态必须带失败代码；变体字节数和尺寸必须为正数。
 - 动态使用 `publishing`、`published`、`failed` 表达图片处理生命周期；只有 `published` 必须带 `published_at`，非作者只能查询已发布动态。媒体后台结算只改变发布状态，不冒充用户正文编辑或推进正文并发版本。
 - `drafts.photo_layout`、`posts.photo_layout` 和 `circle_exit_snapshot_posts.photo_layout` 保存同一份带版本号的 JSONB 拼贴拓扑。它描述有序叶子的递归横/纵切分或等高行断点，不保存像素坐标；图片顺序仍以 `draft_media.position`、`post_media.position` 和退出档案媒体位置为准。
+- `photo_layout`可以为空以兼容旧数据或无图内容；服务端读取时只接受版本、叶子数量和结构都与当前照片集合匹配的拓扑，否则按当前有序照片比例生成回退布局。动态编辑不得用客户端拓扑改变媒体编号集合。
 - 每条退出档案属于一条持久成员关系，同一关系最多保留一份当前退出档案。
 - 退出档案正文与媒体顺序保存在独立冻结表中；成员构成通过不可变成员周期和`captured_at（档案冻结时间）`重建，不额外保存人物资料快照。
 - 退出档案只引用逻辑媒体，不复制图片字节。媒体仍被动态、草稿或任一退出档案引用时，不允许删除底层资源。

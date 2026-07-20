@@ -224,7 +224,7 @@
 每份档案保存：
 
 - `circle_exit_snapshots`：`circleName（圈子名称）`、`circleDescription（圈子简介）`、`capturedAt（冻结时间）`。
-- `circle_exit_snapshot_posts`：`body（冻结正文）`、`createdAt（原创建时间）`、`updatedAt（冻结时最后编辑时间）`、`lastEditedById（最后编辑者编号）`。
+- `circle_exit_snapshot_posts`：`body（冻结正文）`、`createdAt（原创建时间）`、`updatedAt（冻结时最后编辑时间）`、`lastEditedById（最后编辑者编号）`、`photoLayout（冻结时照片排法）`。
 - `circle_exit_snapshot_media`：`mediaId（媒体编号）`、`position（照片顺序）`。
 
 成员构成不另建快照表。系统使用不可变的成员周期，筛选`joinedAt（加入时间） <= capturedAt（冻结时间）`且`leftAt（退出时间）`为空或晚于冻结时间的成员，重建退出时成员列表。头像、全局昵称、姓名和简介等人物资料不冻结；已结束成员周期的圈子昵称也不在档案中展示。

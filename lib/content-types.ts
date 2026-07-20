@@ -145,12 +145,14 @@ export type ProfilePageData = {
     src: string | null;
     focusX: number;
     focusY: number;
+    scale: number;
   };
   cover: {
     mediaId: string | null;
     src: string | null;
     focusX: number;
     focusY: number;
+    scale: number;
   } | null;
   createdAt: string;
   isSelf: boolean;

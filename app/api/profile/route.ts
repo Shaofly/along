@@ -18,6 +18,11 @@ import {
 import { auth } from "@/lib/auth";
 import { deleteMediaAsset } from "@/lib/media/service";
 import { normalizeProfileResidence } from "@/lib/profile-residence";
+import {
+  PROFILE_AVATAR_SCALE_MAX,
+  PROFILE_COVER_SCALE_MAX,
+  PROFILE_MEDIA_SCALE_BASE,
+} from "@/lib/profile-media";
 
 const optionalProfileText = (max: number, message: string) =>
   z.string().trim().max(max, message).transform((value) => value || null);
@@ -31,11 +36,13 @@ const profileSchema = z.object({
     mediaId: z.string().uuid().nullable(),
     focusX: z.number().int().min(0).max(10000),
     focusY: z.number().int().min(0).max(10000),
+    scale: z.number().int().min(PROFILE_MEDIA_SCALE_BASE).max(PROFILE_AVATAR_SCALE_MAX),
   }).optional(),
   cover: z.object({
     mediaId: z.string().uuid().nullable(),
     focusX: z.number().int().min(0).max(10000),
     focusY: z.number().int().min(0).max(10000),
+    scale: z.number().int().min(PROFILE_MEDIA_SCALE_BASE).max(PROFILE_COVER_SCALE_MAX),
   }).optional(),
   personalInfo: z.object({
     gender: optionalProfileText(32, "性别信息不能超过 32 个字"),
@@ -331,10 +338,14 @@ export async function PATCH(request: Request) {
               avatar?.focusX ?? currentAppearance?.avatarFocusX ?? 5000,
             avatarFocusY:
               avatar?.focusY ?? currentAppearance?.avatarFocusY ?? 5000,
+            avatarScale:
+              avatar?.scale ?? currentAppearance?.avatarScale ?? 10000,
             coverFocusX:
               cover?.focusX ?? currentAppearance?.coverFocusX ?? 5000,
             coverFocusY:
               cover?.focusY ?? currentAppearance?.coverFocusY ?? 5000,
+            coverScale:
+              cover?.scale ?? currentAppearance?.coverScale ?? 10000,
             updatedAt: now,
           })
           .onConflictDoUpdate({
@@ -347,10 +358,14 @@ export async function PATCH(request: Request) {
                 avatar?.focusX ?? currentAppearance?.avatarFocusX ?? 5000,
               avatarFocusY:
                 avatar?.focusY ?? currentAppearance?.avatarFocusY ?? 5000,
+              avatarScale:
+                avatar?.scale ?? currentAppearance?.avatarScale ?? 10000,
               coverFocusX:
                 cover?.focusX ?? currentAppearance?.coverFocusX ?? 5000,
               coverFocusY:
                 cover?.focusY ?? currentAppearance?.coverFocusY ?? 5000,
+              coverScale:
+                cover?.scale ?? currentAppearance?.coverScale ?? 10000,
               updatedAt: now,
             },
           });

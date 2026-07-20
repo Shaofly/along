@@ -19,6 +19,9 @@ export async function getShellUser(userId: string) {
         nickname: user.nickname,
         image: user.image,
         avatarMediaId: userProfileAppearance.avatarMediaId,
+        avatarFocusX: userProfileAppearance.avatarFocusX,
+        avatarFocusY: userProfileAppearance.avatarFocusY,
+        avatarScale: userProfileAppearance.avatarScale,
         role: user.role,
       })
       .from(user)
@@ -40,6 +43,9 @@ export async function getShellUser(userId: string) {
         image: profile.avatarMediaId
           ? `/api/media/${profile.avatarMediaId}/thumbnail`
           : profile.image,
+        avatarFocusX: profile.avatarFocusX ?? 5000,
+        avatarFocusY: profile.avatarFocusY ?? 5000,
+        avatarScale: profile.avatarScale ?? 10000,
         draftCount: draftCountRows[0]?.value ?? 0,
       }
     : null;

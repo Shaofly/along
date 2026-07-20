@@ -970,8 +970,10 @@ export const userProfileAppearance = pgTable(
     theme: profileTheme("theme").default("sage").notNull(),
     avatarFocusX: integer("avatar_focus_x").default(5000).notNull(),
     avatarFocusY: integer("avatar_focus_y").default(5000).notNull(),
+    avatarScale: integer("avatar_scale").default(10000).notNull(),
     coverFocusX: integer("cover_focus_x").default(5000).notNull(),
     coverFocusY: integer("cover_focus_y").default(5000).notNull(),
+    coverScale: integer("cover_scale").default(10000).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -992,6 +994,11 @@ export const userProfileAppearance = pgTable(
       "user_profile_appearance_cover_focus_range",
       sql`${table.coverFocusX} between 0 and 10000
         and ${table.coverFocusY} between 0 and 10000`,
+    ),
+    check(
+      "user_profile_appearance_scale_range",
+      sql`${table.avatarScale} between 10000 and 100000
+        and ${table.coverScale} between 10000 and 100000`,
     ),
     check(
       "user_profile_appearance_distinct_media",

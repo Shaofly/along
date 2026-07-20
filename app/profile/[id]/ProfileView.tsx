@@ -9,9 +9,10 @@ import {
   LockKeyhole,
   LockKeyholeOpen,
   Pencil,
+  UserRound,
 } from "lucide-react";
 import Link from "next/link";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
@@ -24,6 +25,7 @@ import type {
   ProfilePageData,
   ProfileViewMode,
 } from "@/lib/content-types";
+import { profileMediaImageStyle } from "@/lib/profile-media";
 
 import { ProfileEditor } from "./ProfileEditor";
 
@@ -101,6 +103,8 @@ function ProfileAccountDetails({
   userId: string;
 }) {
   const [copied, setCopied] = useState<"email" | "id" | null>(null);
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
 
   async function copy(value: string, kind: "email" | "id") {
     await navigator.clipboard.writeText(value);
@@ -109,34 +113,52 @@ function ProfileAccountDetails({
   }
 
   return (
-    <details className="profile-account-details">
-      <summary>账号信息</summary>
-      <dl>
-        <div>
-          <dt>登录邮箱</dt>
-          <dd>{email}</dd>
-          <button
-            aria-label="复制登录邮箱"
-            onClick={() => void copy(email, "email")}
-            type="button"
-          >
-            {copied === "email" ? <Check size={16} /> : <Copy size={16} />}
-          </button>
+    <div className="profile-account-details">
+      <button
+        aria-controls={panelId}
+        aria-expanded={open}
+        className="profile-account-summary"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <UserRound aria-hidden="true" size={17} />
+        <span>账号信息</span>
+      </button>
+      {open ? (
+        <div
+          aria-label="账号信息"
+          className="profile-account-panel"
+          id={panelId}
+          role="region"
+        >
+          <dl>
+            <div>
+              <dt>登录邮箱</dt>
+              <dd>{email}</dd>
+              <button
+                aria-label="复制登录邮箱"
+                onClick={() => void copy(email, "email")}
+                type="button"
+              >
+                {copied === "email" ? <Check size={16} /> : <Copy size={16} />}
+              </button>
+            </div>
+            <div>
+              <dt>用户编号</dt>
+              <dd>{userId}</dd>
+              <button
+                aria-label="复制用户编号"
+                onClick={() => void copy(userId, "id")}
+                type="button"
+              >
+                {copied === "id" ? <Check size={16} /> : <Copy size={16} />}
+              </button>
+            </div>
+          </dl>
+          <p>邮箱暂时不能在这里修改；用户编号用于需要准确确认账号时。</p>
         </div>
-        <div>
-          <dt>用户编号</dt>
-          <dd>{userId}</dd>
-          <button
-            aria-label="复制用户编号"
-            onClick={() => void copy(userId, "id")}
-            type="button"
-          >
-            {copied === "id" ? <Check size={16} /> : <Copy size={16} />}
-          </button>
-        </div>
-      </dl>
-      <p>邮箱暂时不能在这里修改；用户编号用于需要准确确认账号时。</p>
-    </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -259,6 +281,7 @@ function ProfilePrivacyToggle({
   return (
     <span className="profile-privacy-control">
       <button
+        aria-label={protectedNow ? "关闭隐私保护" : "开启隐私保护"}
         aria-describedby={tooltipId}
         aria-pressed={protectedNow}
         className={protectedNow ? "is-protected" : ""}
@@ -266,12 +289,26 @@ function ProfilePrivacyToggle({
         onClick={() => void togglePrivacy()}
         type="button"
       >
-        {protectedNow ? (
-          <LockKeyhole size={17} />
-        ) : (
-          <LockKeyholeOpen size={17} />
-        )}
-        {protectedNow ? "隐私保护中" : "开启隐私保护"}
+        <span
+          aria-hidden="true"
+          className="t-icon-swap profile-privacy-icon-swap"
+          data-state={protectedNow ? "a" : "b"}
+        >
+          <span className="t-icon" data-icon="a">
+            <LockKeyhole size={17} />
+          </span>
+          <span className="t-icon" data-icon="b">
+            <LockKeyholeOpen size={17} />
+          </span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="profile-privacy-text-swap"
+          data-state={protectedNow ? "a" : "b"}
+        >
+          <span data-text="a">隐私保护中</span>
+          <span data-text="b">开启隐私保护</span>
+        </span>
       </button>
       <span className="profile-privacy-tooltip" id={tooltipId} role="tooltip">
         选中时他人将<strong>无法获悉</strong>你的隐私数据
@@ -381,7 +418,9 @@ export function ProfileView({
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [editorMounted, setEditorMounted] = useState(false);
+  const [profileHeaderCompact, setProfileHeaderCompact] = useState(false);
   const [privacyPending, setPrivacyPending] = useState(false);
+  const identityRowRef = useRef<HTMLDivElement>(null);
   const [profileInfoSettingsSource, setProfileInfoSettingsSource] =
     useState(profile.personalInfoSettings);
   const [profileInfoSettings, setProfileInfoSettings] =
@@ -398,6 +437,22 @@ export function ProfileView({
     year: "numeric",
     month: "long",
   }).format(new Date(profile.createdAt));
+  const profileDisplayName = profile.nickname ?? profile.realName;
+
+  useEffect(() => {
+    const identityRow = identityRowRef.current;
+    if (!identityRow) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setProfileHeaderCompact(!entry.isIntersecting),
+      {
+        rootMargin: "-64px 0px 0px",
+        threshold: 0,
+      },
+    );
+    observer.observe(identityRow);
+    return () => observer.disconnect();
+  }, []);
 
   function beginEdit() {
     if (privacyPending) return;
@@ -414,7 +469,20 @@ export function ProfileView({
   }
 
   return (
-    <AppShell pageClassName="profile-page" user={currentUser}>
+    <AppShell
+      mobileHeader={{
+        compactProfile: profileHeaderCompact,
+        mode: profile.isSelf ? "primary" : "detail",
+        profileIdentity: {
+          image: profile.avatar.src,
+          imageStyle: profileMediaImageStyle(profile.avatar),
+          name: profileDisplayName,
+        },
+        title: "个人",
+      }}
+      pageClassName="profile-page"
+      user={currentUser}
+    >
       <section
         className={`profile-masthead profile-theme-${profile.theme}${
           profile.isSelf ? " profile-masthead--self" : ""
@@ -428,25 +496,17 @@ export function ProfileView({
             <img
               alt=""
               src={profile.cover.src}
-              style={{
-                objectPosition: `${profile.cover.focusX / 100}% ${
-                  profile.cover.focusY / 100
-                }%`,
-              }}
+              style={profileMediaImageStyle(profile.cover)}
             />
           ) : null}
         </div>
 
         <div className="profile-intro">
-          <div className="profile-identity-row">
+          <div className="profile-identity-row" ref={identityRowRef}>
             <div className="profile-avatar">
               <UserAvatar
                 image={profile.avatar.src}
-                imageStyle={{
-                  objectPosition: `${profile.avatar.focusX / 100}% ${
-                    profile.avatar.focusY / 100
-                  }%`,
-                }}
+                imageStyle={profileMediaImageStyle(profile.avatar)}
                 name={profile.name}
               />
             </div>
@@ -522,12 +582,6 @@ export function ProfileView({
         className="profile-stream"
       >
         <header className="profile-stream-heading">
-          <div>
-            <p className="profile-stream-label">个人动态</p>
-            <h2 id="profile-stream-title">
-              {profile.isSelf ? "我留下的片段" : `${profile.name} 留下的片段`}
-            </h2>
-          </div>
           <nav aria-label="筛选个人空间内容" className="profile-content-tabs">
             {(profile.isSelf ? [...tabs, privateTab] : tabs).map((tab) => (
               <Link
@@ -540,6 +594,12 @@ export function ProfileView({
               </Link>
             ))}
           </nav>
+          <div>
+            <p className="profile-stream-label">个人动态</p>
+            <h2 id="profile-stream-title">
+              {profile.isSelf ? "我留下的片段" : `${profile.name} 留下的片段`}
+            </h2>
+          </div>
         </header>
         <ProfileFeed
           friends={friends}

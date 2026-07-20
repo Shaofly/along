@@ -1,16 +1,17 @@
 "use client";
 
 import { animate, AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
-import { ArrowLeft, Bell, ChevronDown, FilePenLine, LogOut, Settings, UserRound, UsersRound, X } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, FilePenLine, LogOut, Menu, Settings, UserRound, UsersRound, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { MouseEvent, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { CSSProperties, MouseEvent, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import { SegmentedControl } from "@/app/components/SegmentedControl";
 import { TaskRouteTransitionProvider } from "@/app/components/TaskRouteTransition";
 import { UserAvatar } from "@/app/components/UserAvatar";
 import { authClient } from "@/lib/auth-client";
+import { profileMediaImageStyle } from "@/lib/profile-media";
 
 export type ShellUser = {
   id: string;
@@ -18,12 +19,26 @@ export type ShellUser = {
   realName: string;
   nickname: string | null;
   image: string | null;
+  avatarFocusX: number;
+  avatarFocusY: number;
+  avatarScale: number;
   role?: "admin" | "member";
   draftCount: number;
 };
 
 type PrimaryRoute = "home" | "circles" | "friends" | "profile";
 type DrawerGestureMode = "pending" | "horizontal";
+
+export type MobileHeaderContext = {
+  compactProfile?: boolean;
+  mode?: "primary" | "detail";
+  profileIdentity?: {
+    image: string | null;
+    imageStyle?: CSSProperties;
+    name: string;
+  };
+  title?: string;
+};
 
 const primaryOptions = [
   { value: "home", label: "首页" },
@@ -73,10 +88,12 @@ function drawerWidth() {
 
 export function AppShell({
   children,
+  mobileHeader,
   user,
   pageClassName = "",
 }: {
   children: ReactNode;
+  mobileHeader?: MobileHeaderContext;
   user: ShellUser;
   pageClassName?: string;
 }) {
@@ -86,6 +103,8 @@ export function AppShell({
   const secondaryTitle = secondaryRouteTitle(pathname);
   const isSecondaryRoute = secondaryTitle !== null;
   const isTaskRoute = isTaskRoutePath(pathname);
+  const isMobileDetailRoute = mobileHeader?.mode === "detail";
+  const isProfileHeaderRoute = Boolean(mobileHeader?.profileIdentity);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [secondaryExiting, setSecondaryExiting] = useState(false);
@@ -116,6 +135,20 @@ export function AppShell({
     ? pendingNavigation.value
     : routeFromPath(pathname, user.id);
   const accountDisplayName = user.nickname ?? user.realName;
+  const shellAvatarStyle = profileMediaImageStyle({
+    focusX: user.avatarFocusX,
+    focusY: user.avatarFocusY,
+    scale: user.avatarScale,
+  });
+  const primaryTitle =
+    primaryOptions.find((option) => option.value === activeRoute)?.label ??
+    "首页";
+  const mobileHeaderTitle =
+    secondaryTitle ?? mobileHeader?.title ?? primaryTitle;
+  const showProfileIdentity = Boolean(
+    mobileHeader?.profileIdentity &&
+      (mobileHeader.compactProfile || isMobileDetailRoute),
+  );
   const menuVisible =
     menuOpen && desktopAccountPathRef.current === pathname;
 
@@ -216,7 +249,7 @@ export function AppShell({
   }
 
   function beginDrawerGesture(event: PointerEvent<HTMLDivElement>) {
-    if (isSecondaryRoute || isTaskRoute) return;
+    if (isSecondaryRoute || isMobileDetailRoute || isTaskRoute) return;
     if (!window.matchMedia("(max-width: 700px)").matches || !event.isPrimary) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable='true'], [data-no-drawer-gesture]")) return;
@@ -338,7 +371,10 @@ export function AppShell({
   }
 
   function returnFromSecondary() {
-    if (!isSecondaryRoute || secondaryBackInProgress.current) return;
+    if (
+      (!isSecondaryRoute && !isMobileDetailRoute) ||
+      secondaryBackInProgress.current
+    ) return;
     secondaryBackInProgress.current = true;
     setMenuOpen(false);
 
@@ -383,7 +419,7 @@ export function AppShell({
 
   return (
     <div
-      className={`app-shell${drawerOpen ? " drawer-open" : ""}${isSecondaryRoute ? " secondary-route" : ""}${secondaryExiting ? " secondary-exiting" : ""}${isTaskRoute ? " task-route" : ""}${taskExiting ? " task-exiting" : ""}`}
+      className={`app-shell${drawerOpen ? " drawer-open" : ""}${isSecondaryRoute ? " secondary-route" : ""}${isMobileDetailRoute ? " mobile-detail-route" : ""}${isProfileHeaderRoute ? " profile-header-route" : ""}${mobileHeader?.compactProfile ? " mobile-profile-header-compact" : ""}${secondaryExiting ? " secondary-exiting" : ""}${isTaskRoute ? " task-route" : ""}${taskExiting ? " task-exiting" : ""}`}
       onClickCapture={handleShellClickCapture}
       onPointerCancel={cancelDrawerGesture}
       onPointerDown={beginDrawerGesture}
@@ -396,7 +432,7 @@ export function AppShell({
         inert={drawerOpen ? undefined : true}
       >
         <div className="drawer-profile">
-          <div className="drawer-avatar"><UserAvatar image={user.image} name={user.name} /></div>
+          <div className="drawer-avatar"><UserAvatar image={user.image} imageStyle={shellAvatarStyle} name={user.name} /></div>
           <div>
             <strong>{user.name}</strong>
             {user.nickname ? <span>{user.realName}</span> : null}
@@ -458,8 +494,19 @@ export function AppShell({
                 onClick={openDrawer}
                 type="button"
               >
-                <UserAvatar image={user.image} name={user.name} />
+                <Menu aria-hidden="true" size={23} strokeWidth={1.9} />
               </button>
+              {isMobileDetailRoute ? (
+                <button
+                  aria-label="返回上一页"
+                  className="header-mobile-detail-back"
+                  disabled={secondaryExiting}
+                  onClick={returnFromSecondary}
+                  type="button"
+                >
+                  <ArrowLeft aria-hidden="true" size={21} strokeWidth={1.9} />
+                </button>
+              ) : null}
               <div className="header-navigation-cluster">
                 <SegmentedControl
                   ariaLabel="主要栏目"
@@ -471,7 +518,29 @@ export function AppShell({
                 />
               </div>
             </div>
-            <span className="mobile-header-name">{secondaryTitle ?? user.name}</span>
+            <span className="mobile-header-name">
+              <span
+                aria-hidden={showProfileIdentity}
+                className="mobile-header-title"
+              >
+                {mobileHeaderTitle}
+              </span>
+              {mobileHeader?.profileIdentity ? (
+                <span
+                  aria-hidden={!showProfileIdentity}
+                  className="mobile-header-profile-identity"
+                >
+                  <span className="mobile-header-profile-avatar">
+                    <UserAvatar
+                      image={mobileHeader.profileIdentity.image}
+                      imageStyle={mobileHeader.profileIdentity.imageStyle}
+                      name={mobileHeader.profileIdentity.name}
+                    />
+                  </span>
+                  <strong>{mobileHeader.profileIdentity.name}</strong>
+                </span>
+              ) : null}
+            </span>
           </div>
 
           <div className="header-utility-actions">
@@ -510,7 +579,7 @@ export function AppShell({
                 type="button"
               >
                 <span className="header-account-avatar">
-                  <UserAvatar image={user.image} name={user.name} />
+                  <UserAvatar image={user.image} imageStyle={shellAvatarStyle} name={user.name} />
                 </span>
                 <span
                   className="header-account-name"

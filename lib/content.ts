@@ -636,8 +636,10 @@ export async function getProfileForViewer(
       theme: userProfileAppearance.theme,
       avatarFocusX: userProfileAppearance.avatarFocusX,
       avatarFocusY: userProfileAppearance.avatarFocusY,
+      avatarScale: userProfileAppearance.avatarScale,
       coverFocusX: userProfileAppearance.coverFocusX,
       coverFocusY: userProfileAppearance.coverFocusY,
+      coverScale: userProfileAppearance.coverScale,
       profileDetailsUserId: userProfileDetails.userId,
       gender: userProfileDetails.gender,
       residence: userProfileDetails.residence,
@@ -674,8 +676,10 @@ export async function getProfileForViewer(
   const theme = profile.theme ?? "sage";
   const avatarFocusX = profile.avatarFocusX ?? 5000;
   const avatarFocusY = profile.avatarFocusY ?? 5000;
+  const avatarScale = profile.avatarScale ?? 10000;
   const coverFocusX = profile.coverFocusX ?? 5000;
   const coverFocusY = profile.coverFocusY ?? 5000;
+  const coverScale = profile.coverScale ?? 10000;
   const coverIsVisible = audience === "self" || audience === "friend";
   const profileInfoVisibility = profile.profileInfoVisibility ?? "private";
   let selectedFriendIds: string[] = [];
@@ -758,6 +762,7 @@ export async function getProfileForViewer(
         : profile.image,
       focusX: avatarFocusX,
       focusY: avatarFocusY,
+      scale: avatarScale,
     },
     cover: coverIsVisible
       ? {
@@ -767,6 +772,7 @@ export async function getProfileForViewer(
             : null,
           focusX: coverFocusX,
           focusY: coverFocusY,
+          scale: coverScale,
         }
       : null,
     createdAt: profile.createdAt.toISOString(),

@@ -49,6 +49,13 @@ import {
   parseProfileResidence,
   type ProfileResidenceMode,
 } from "@/lib/profile-residence";
+import {
+  clampProfileMediaScale,
+  PROFILE_AVATAR_SCALE_MAX,
+  PROFILE_COVER_SCALE_MAX,
+  PROFILE_MEDIA_SCALE_BASE,
+  profileMediaImageStyle,
+} from "@/lib/profile-media";
 
 const themes: Array<{
   description: string;
@@ -72,6 +79,106 @@ const residenceModeOptions = [
   { value: "domestic", label: "国内" },
   { value: "overseas", label: "海外" },
 ] as const;
+
+type ProfilePreviewGeometry = {
+  baseHeight: number;
+  baseWidth: number;
+  containerHeight: number;
+  containerWidth: number;
+};
+
+function clampProfileFocus(value: number) {
+  return Math.round(Math.min(10000, Math.max(0, value)));
+}
+
+function getProfilePreviewGeometry(
+  preview: HTMLDivElement | null,
+  image: HTMLImageElement | null,
+): ProfilePreviewGeometry | null {
+  if (!preview || !image || !image.naturalWidth || !image.naturalHeight) {
+    return null;
+  }
+  const bounds = preview.getBoundingClientRect();
+  const containerRatio = bounds.width / bounds.height;
+  const imageRatio = image.naturalWidth / image.naturalHeight;
+  const baseWidth =
+    imageRatio >= containerRatio ? bounds.height * imageRatio : bounds.width;
+  const baseHeight =
+    imageRatio >= containerRatio ? bounds.height : bounds.width / imageRatio;
+  return {
+    baseHeight,
+    baseWidth,
+    containerHeight: bounds.height,
+    containerWidth: bounds.width,
+  };
+}
+
+function profileFocusAfterZoom({
+  baseHeight,
+  baseWidth,
+  containerHeight,
+  containerWidth,
+  currentPointX,
+  currentPointY,
+  focusX,
+  focusY,
+  nextScale,
+  scale,
+  startPointX,
+  startPointY,
+}: ProfilePreviewGeometry & {
+  currentPointX: number;
+  currentPointY: number;
+  focusX: number;
+  focusY: number;
+  nextScale: number;
+  scale: number;
+  startPointX: number;
+  startPointY: number;
+}) {
+  function axisFocus({
+    baseSize,
+    containerSize,
+    currentPoint,
+    focus,
+    startPoint,
+  }: {
+    baseSize: number;
+    containerSize: number;
+    currentPoint: number;
+    focus: number;
+    startPoint: number;
+  }) {
+    const startFactor = scale / PROFILE_MEDIA_SCALE_BASE;
+    const nextFactor = nextScale / PROFILE_MEDIA_SCALE_BASE;
+    const startImageSize = baseSize * startFactor;
+    const nextImageSize = baseSize * nextFactor;
+    const startOverflow = Math.max(0, startImageSize - containerSize);
+    const nextOverflow = Math.max(0, nextImageSize - containerSize);
+    if (nextOverflow < 0.5) return clampProfileFocus(focus);
+    const startLeft = -startOverflow * (focus / 10000);
+    const imagePoint = (startPoint - startLeft) / startImageSize;
+    const nextLeft = currentPoint - imagePoint * nextImageSize;
+    return clampProfileFocus((-nextLeft / nextOverflow) * 10000);
+  }
+
+  return {
+    x: axisFocus({
+      baseSize: baseWidth,
+      containerSize: containerWidth,
+      currentPoint: currentPointX,
+      focus: focusX,
+      startPoint: startPointX,
+    }),
+    y: axisFocus({
+      baseSize: baseHeight,
+      containerSize: containerHeight,
+      currentPoint: currentPointY,
+      focus: focusY,
+      startPoint: startPointY,
+    }),
+  };
+}
 
 function fileSignature(file: File | null) {
   return file
@@ -97,6 +204,8 @@ function ProfileMediaField({
   onChoose,
   onFocusChange,
   onRemove,
+  onScaleChange,
+  scale,
   src,
 }: {
   acceptLabel: string;
@@ -108,9 +217,14 @@ function ProfileMediaField({
   onChoose: (file: File | null) => void;
   onFocusChange: (x: number, y: number) => void;
   onRemove: () => void;
+  onScaleChange: (scale: number) => void;
+  scale: number;
   src: string | null;
 }) {
+  const maxScale =
+    kind === "avatar" ? PROFILE_AVATAR_SCALE_MAX : PROFILE_COVER_SCALE_MAX;
   const previewRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const dragState = useRef<{
     focusX: number;
     focusY: number;
@@ -118,13 +232,76 @@ function ProfileMediaField({
     startX: number;
     startY: number;
   } | null>(null);
+  const pinchPointers = useRef(
+    new Map<number, { x: number; y: number }>(),
+  );
+  const pinchState = useRef<{
+    baseHeight: number;
+    baseWidth: number;
+    containerHeight: number;
+    containerWidth: number;
+    distance: number;
+    focusX: number;
+    focusY: number;
+    midpointX: number;
+    midpointY: number;
+    scale: number;
+  } | null>(null);
+  const focusRef = useRef({ x: focusX, y: focusY });
+  const scaleRef = useRef(scale);
+  const onFocusChangeRef = useRef(onFocusChange);
+  const onScaleChangeRef = useRef(onScaleChange);
   const [dragging, setDragging] = useState(false);
+  const [pinching, setPinching] = useState(false);
   const previewUrl = useObjectUrl(file);
   const visibleSrc = previewUrl ?? src;
 
-  function clampFocus(value: number) {
-    return Math.round(Math.min(10000, Math.max(0, value)));
-  }
+  useEffect(() => {
+    focusRef.current = { x: focusX, y: focusY };
+    scaleRef.current = scale;
+    onFocusChangeRef.current = onFocusChange;
+    onScaleChangeRef.current = onScaleChange;
+  }, [focusX, focusY, onFocusChange, onScaleChange, scale]);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview || !visibleSrc) return;
+    const zoomWithTrackpad = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const nextScale = clampProfileMediaScale(
+        scaleRef.current * Math.exp(-delta * 0.0025),
+        maxScale,
+      );
+      const geometry = getProfilePreviewGeometry(
+        previewRef.current,
+        imageRef.current,
+      );
+      if (geometry) {
+        const bounds = preview.getBoundingClientRect();
+        const nextFocus = profileFocusAfterZoom({
+          ...geometry,
+          currentPointX: event.clientX - bounds.left,
+          currentPointY: event.clientY - bounds.top,
+          focusX: focusRef.current.x,
+          focusY: focusRef.current.y,
+          nextScale,
+          scale: scaleRef.current,
+          startPointX: event.clientX - bounds.left,
+          startPointY: event.clientY - bounds.top,
+        });
+        focusRef.current = nextFocus;
+        onFocusChangeRef.current(nextFocus.x, nextFocus.y);
+      }
+      scaleRef.current = nextScale;
+      onScaleChangeRef.current(nextScale);
+    };
+    preview.addEventListener("wheel", zoomWithTrackpad, {
+      passive: false,
+    });
+    return () => preview.removeEventListener("wheel", zoomWithTrackpad);
+  }, [maxScale, visibleSrc]);
 
   function moveFocusWithKeyboard(event: KeyboardEvent<HTMLButtonElement>) {
     const step = event.shiftKey ? 500 : 100;
@@ -138,7 +315,121 @@ function ProfileMediaField({
     else if (event.key === "ArrowDown") next.y += step;
     else return;
     event.preventDefault();
-    onFocusChange(clampFocus(next.x), clampFocus(next.y));
+    onFocusChange(clampProfileFocus(next.x), clampProfileFocus(next.y));
+  }
+
+  function markerPosition(value: number) {
+    const fraction = value / 10000;
+    return `calc(${value / 100}% + ${15 - fraction * 30}px)`;
+  }
+
+  function pointerDistance() {
+    const points = [...pinchPointers.current.values()];
+    if (points.length < 2) return 0;
+    return Math.hypot(
+      points[0].x - points[1].x,
+      points[0].y - points[1].y,
+    );
+  }
+
+  function pointerMidpoint() {
+    const points = [...pinchPointers.current.values()];
+    if (points.length < 2) return null;
+    return {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2,
+    };
+  }
+
+  function beginPreviewGesture(event: PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "touch" || !visibleSrc) return;
+    pinchPointers.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (pinchPointers.current.size !== 2) return;
+    const distance = pointerDistance();
+    const midpoint = pointerMidpoint();
+    const geometry = getProfilePreviewGeometry(
+      previewRef.current,
+      imageRef.current,
+    );
+    const preview = previewRef.current;
+    if (!distance || !midpoint || !geometry || !preview) return;
+    const bounds = preview.getBoundingClientRect();
+    pinchState.current = {
+      ...geometry,
+      distance,
+      focusX,
+      focusY,
+      midpointX: midpoint.x - bounds.left,
+      midpointY: midpoint.y - bounds.top,
+      scale: scaleRef.current,
+    };
+    dragState.current = null;
+    setDragging(false);
+    setPinching(true);
+    for (const pointerId of pinchPointers.current.keys()) {
+      try {
+        event.currentTarget.setPointerCapture(pointerId);
+      } catch {
+        // A browser may have already cancelled one pointer for page scrolling.
+      }
+    }
+    event.preventDefault();
+  }
+
+  function movePreviewGesture(event: PointerEvent<HTMLDivElement>) {
+    if (
+      event.pointerType !== "touch" ||
+      !pinchPointers.current.has(event.pointerId)
+    ) {
+      return;
+    }
+    pinchPointers.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    const pinch = pinchState.current;
+    if (!pinch || pinchPointers.current.size < 2) return;
+    const distance = pointerDistance();
+    const midpoint = pointerMidpoint();
+    const preview = previewRef.current;
+    if (!distance || !midpoint || !preview) return;
+    event.preventDefault();
+    const nextScale = clampProfileMediaScale(
+      pinch.scale * (distance / pinch.distance),
+      maxScale,
+    );
+    const bounds = preview.getBoundingClientRect();
+    const nextFocus = profileFocusAfterZoom({
+      baseHeight: pinch.baseHeight,
+      baseWidth: pinch.baseWidth,
+      containerHeight: pinch.containerHeight,
+      containerWidth: pinch.containerWidth,
+      currentPointX: midpoint.x - bounds.left,
+      currentPointY: midpoint.y - bounds.top,
+      focusX: pinch.focusX,
+      focusY: pinch.focusY,
+      nextScale,
+      scale: pinch.scale,
+      startPointX: pinch.midpointX,
+      startPointY: pinch.midpointY,
+    });
+    onFocusChange(nextFocus.x, nextFocus.y);
+    onScaleChange(nextScale);
+  }
+
+  function finishPreviewGesture(event: PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "touch") return;
+    pinchPointers.current.delete(event.pointerId);
+    if (pinchPointers.current.size < 2) {
+      pinchState.current = null;
+      setPinching(false);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   function finishFocusDrag(event: PointerEvent<HTMLButtonElement>) {
@@ -174,16 +465,21 @@ function ProfileMediaField({
       </div>
 
       <div
-        className={`profile-media-preview${visibleSrc ? " has-image" : ""}`}
+        className={`profile-media-preview${visibleSrc ? " has-image" : ""}${
+          pinching ? " is-pinching" : ""
+        }`}
+        onPointerCancel={finishPreviewGesture}
+        onPointerDown={beginPreviewGesture}
+        onPointerMove={movePreviewGesture}
+        onPointerUp={finishPreviewGesture}
         ref={previewRef}
       >
         {visibleSrc ? (
           <img
             alt=""
+            ref={imageRef}
             src={visibleSrc}
-            style={{
-              objectPosition: `${focusX / 100}% ${focusY / 100}%`,
-            }}
+            style={profileMediaImageStyle({ focusX, focusY, scale })}
           />
         ) : kind === "avatar" ? (
           <span className="profile-media-avatar-fallback">
@@ -194,6 +490,9 @@ function ProfileMediaField({
             选择一张能代表近来生活的照片
           </span>
         )}
+        {visibleSrc && kind === "avatar" ? (
+          <span aria-hidden="true" className="profile-avatar-safe-area" />
+        ) : null}
         {visibleSrc ? (
           <button
             aria-label={`拖动${kind === "avatar" ? "头像" : "封面"}焦点，或使用下方滑杆精确调整`}
@@ -227,14 +526,20 @@ function ProfileMediaField({
               const deltaY = event.clientY - drag.startY;
               if (Math.hypot(deltaX, deltaY) < 3) return;
               onFocusChange(
-                clampFocus(drag.focusX + (deltaX / bounds.width) * 10000),
-                clampFocus(drag.focusY + (deltaY / bounds.height) * 10000),
+                clampProfileFocus(
+                  drag.focusX +
+                    (deltaX / Math.max(1, bounds.width - 30)) * 10000,
+                ),
+                clampProfileFocus(
+                  drag.focusY +
+                    (deltaY / Math.max(1, bounds.height - 30)) * 10000,
+                ),
               );
             }}
             onPointerUp={finishFocusDrag}
             style={{
-              left: `${focusX / 100}%`,
-              top: `${focusY / 100}%`,
+              left: markerPosition(focusX),
+              top: markerPosition(focusY),
             }}
             type="button"
           >
@@ -270,6 +575,20 @@ function ProfileMediaField({
                 type="range"
                 value={focusY}
               />
+            </label>
+            <label>
+              <span>缩放</span>
+              <input
+                aria-label={`${kind === "avatar" ? "头像" : "封面"}缩放比例`}
+                max={maxScale}
+                min={PROFILE_MEDIA_SCALE_BASE}
+                onChange={(event) =>
+                  onScaleChange(Number(event.target.value))
+                }
+                type="range"
+                value={scale}
+              />
+              <output>{Math.round(scale / 100)}%</output>
             </label>
           </div>
           <button onClick={onRemove} type="button">
@@ -353,10 +672,14 @@ export function ProfileEditor({
     x: profile.avatar.focusX,
     y: profile.avatar.focusY,
   });
+  const [avatarScale, setAvatarScale] = useState(profile.avatar.scale);
   const [coverFocus, setCoverFocus] = useState({
     x: profile.cover?.focusX ?? 5000,
     y: profile.cover?.focusY ?? 5000,
   });
+  const [coverScale, setCoverScale] = useState(
+    profile.cover?.scale ?? PROFILE_MEDIA_SCALE_BASE,
+  );
   const [pendingAvatarId, setPendingAvatarId] = useState<string | null>(null);
   const [pendingCoverId, setPendingCoverId] = useState<string | null>(null);
   const cleanupIds = useRef(new Set<string>());
@@ -403,10 +726,12 @@ export function ProfileEditor({
         x: profile.avatar.focusX,
         y: profile.avatar.focusY,
       },
+      avatarScale: profile.avatar.scale,
       coverFocus: {
         x: profile.cover?.focusX ?? 5000,
         y: profile.cover?.focusY ?? 5000,
       },
+      coverScale: profile.cover?.scale ?? PROFILE_MEDIA_SCALE_BASE,
       avatarFile: null,
       coverFile: null,
     }),
@@ -427,7 +752,9 @@ export function ProfileEditor({
     avatarMediaId,
     coverMediaId,
     avatarFocus,
+    avatarScale,
     coverFocus,
+    coverScale,
     avatarFile: fileSignature(avatarFile),
     coverFile: fileSignature(coverFile),
   });
@@ -554,11 +881,13 @@ export function ProfileEditor({
             mediaId: nextAvatarId,
             focusX: avatarFocus.x,
             focusY: avatarFocus.y,
+            scale: avatarScale,
           },
           cover: {
             mediaId: nextCoverId,
             focusX: coverFocus.x,
             focusY: coverFocus.y,
+            scale: coverScale,
           },
         }),
       });
@@ -619,6 +948,10 @@ export function ProfileEditor({
               void discardPendingMedia(pendingAvatarId);
               setPendingAvatarId(null);
               setAvatarFile(file);
+              if (file) {
+                setAvatarFocus({ x: 5000, y: 5000 });
+                setAvatarScale(PROFILE_MEDIA_SCALE_BASE);
+              }
               setError("");
             }}
             onFocusChange={(x, y) => setAvatarFocus({ x, y })}
@@ -628,7 +961,11 @@ export function ProfileEditor({
               setAvatarFile(null);
               setAvatarMediaId(null);
               setAvatarSrc(null);
+              setAvatarFocus({ x: 5000, y: 5000 });
+              setAvatarScale(PROFILE_MEDIA_SCALE_BASE);
             }}
+            onScaleChange={setAvatarScale}
+            scale={avatarScale}
             src={avatarSrc}
           />
           <ProfileMediaField
@@ -642,6 +979,10 @@ export function ProfileEditor({
               void discardPendingMedia(pendingCoverId);
               setPendingCoverId(null);
               setCoverFile(file);
+              if (file) {
+                setCoverFocus({ x: 5000, y: 5000 });
+                setCoverScale(PROFILE_MEDIA_SCALE_BASE);
+              }
               setError("");
             }}
             onFocusChange={(x, y) => setCoverFocus({ x, y })}
@@ -651,7 +992,11 @@ export function ProfileEditor({
               setCoverFile(null);
               setCoverMediaId(null);
               setCoverSrc(null);
+              setCoverFocus({ x: 5000, y: 5000 });
+              setCoverScale(PROFILE_MEDIA_SCALE_BASE);
             }}
+            onScaleChange={setCoverScale}
+            scale={coverScale}
             src={coverSrc}
           />
         </div>

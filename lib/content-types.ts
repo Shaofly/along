@@ -117,10 +117,11 @@ export type CircleSummary = {
 export type FriendSummary = {
   id: string;
   name: string;
-  realName: string;
+  realName: string | null;
   nickname: string | null;
   identityName: string;
   displayName: string;
+  identityProtected: boolean;
   remark: string | null;
   image: string | null;
   bio: string;
@@ -129,8 +130,9 @@ export type FriendSummary = {
 export type ProfilePageData = {
   id: string;
   name: string;
-  realName: string;
+  realName: string | null;
   nickname: string | null;
+  identityProtected: boolean;
   image: string | null;
   legacyImage: string | null;
   bio: string;

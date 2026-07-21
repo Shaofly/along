@@ -715,6 +715,10 @@ export async function getProfileForViewer(
   const coverScale = profile.coverScale ?? 10000;
   const coverIsVisible = audience === "self" || audience === "friend";
   const profileInfoVisibility = profile.profileInfoVisibility ?? "private";
+  const identityProtected = profileInfoVisibility === "private";
+  const safeProfileName = identityProtected
+    ? profile.nickname ?? "一位朋友"
+    : profile.nickname ?? profile.realName;
   let selectedFriendIds: string[] = [];
   let canViewPersonalInfo =
     isSelf || profileInfoVisibility === "all";
@@ -766,9 +770,10 @@ export async function getProfileForViewer(
 
   return {
     id: profile.id,
-    name: profile.name,
-    realName: profile.realName,
+    name: isSelf ? profile.name : safeProfileName,
+    realName: isSelf || !identityProtected ? profile.realName : null,
     nickname: profile.nickname,
+    identityProtected,
     image: profile.avatarMediaId
       ? `/api/media/${profile.avatarMediaId}/thumbnail`
       : profile.image,

@@ -95,6 +95,74 @@ function emptyCopy(profile: ProfilePageData) {
       };
 }
 
+function AnimatedTextSwap({
+  className = "",
+  reserveValues,
+  value,
+}: {
+  className?: string;
+  reserveValues: string[];
+  value: string;
+}) {
+  const [initialValue] = useState(value);
+  const displayedValueRef = useRef(initialValue);
+  const textRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element) return;
+
+    element.classList.remove("is-exit", "is-enter-start");
+    if (displayedValueRef.current === value) {
+      element.textContent = value;
+      return;
+    }
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      element.textContent = value;
+      displayedValueRef.current = value;
+      return;
+    }
+
+    const duration =
+      Number.parseFloat(
+        window
+          .getComputedStyle(document.documentElement)
+          .getPropertyValue("--text-swap-dur"),
+      ) || 150;
+    element.classList.add("is-exit");
+    const timer = window.setTimeout(() => {
+      element.textContent = value;
+      displayedValueRef.current = value;
+      element.classList.remove("is-exit");
+      element.classList.add("is-enter-start");
+      void element.offsetHeight;
+      element.classList.remove("is-enter-start");
+    }, duration);
+
+    return () => {
+      window.clearTimeout(timer);
+      element.classList.remove("is-exit", "is-enter-start");
+    };
+  }, [value]);
+
+  return (
+    <span
+      aria-hidden="true"
+      className={`profile-text-swap-shell${className ? ` ${className}` : ""}`}
+    >
+      {[...new Set(reserveValues)].map((reservedValue) => (
+        <span className="profile-text-swap-measure" key={reservedValue}>
+          {reservedValue}
+        </span>
+      ))}
+      <span className="t-text-swap" ref={textRef}>
+        {initialValue}
+      </span>
+    </span>
+  );
+}
+
 function ProfileAccountDetails({
   email,
   userId,
@@ -162,7 +230,13 @@ function ProfileAccountDetails({
   );
 }
 
-function ProfilePersonalInfo({ profile }: { profile: ProfilePageData }) {
+function ProfilePersonalInfo({
+  hidden,
+  profile,
+}: {
+  hidden: boolean;
+  profile: ProfilePageData;
+}) {
   const info = profile.personalInfo;
   if (!info) return null;
   const items = [
@@ -195,16 +269,27 @@ function ProfilePersonalInfo({ profile }: { profile: ProfilePageData }) {
   if (!items.length) return null;
 
   return (
-    <dl aria-label="个人信息" className="profile-personal-info">
-      {items.map((item) => (
-        <div key={item.key}>
-          <dt>{item.label}</dt>
-          <dd>
-            {item.href ? <a href={item.href}>{item.value}</a> : item.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <div
+      className="profile-personal-info-reveal"
+      data-hidden={hidden ? "true" : "false"}
+    >
+      <div
+        aria-hidden={hidden}
+        className="profile-personal-info-reveal-inner"
+        inert={hidden}
+      >
+        <dl aria-label="个人信息" className="profile-personal-info">
+          {items.map((item) => (
+            <div key={item.key}>
+              <dt>{item.label}</dt>
+              <dd>
+                {item.href ? <a href={item.href}>{item.value}</a> : item.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
   );
 }
 
@@ -212,8 +297,10 @@ function ProfilePrivacyToggle({
   onPendingChange,
   onPersisted,
   onSettingsChange,
+  nickname,
   settings,
 }: {
+  nickname: string | null;
   onPendingChange: (pending: boolean) => void;
   onPersisted: () => void;
   onSettingsChange: (settings: ProfileInfoSettings) => void;
@@ -224,9 +311,16 @@ function ProfilePrivacyToggle({
   const [error, setError] = useState("");
   const { lastSharedVisibility, visibility } = settings;
   const protectedNow = visibility === "private";
+  const tooltipText = protectedNow
+    ? "你的个人信息将不再对外展示"
+    : "对外隐藏你的姓名和个人信息";
 
   async function togglePrivacy() {
     if (pending) return;
+    if (!protectedNow && !nickname?.trim()) {
+      setError("请先在编辑资料中设置昵称，再开启隐私保护。");
+      return;
+    }
 
     const previousSettings = settings;
     const sharedVisibility =
@@ -301,17 +395,25 @@ function ProfilePrivacyToggle({
             <LockKeyholeOpen size={17} />
           </span>
         </span>
-        <span
-          aria-hidden="true"
+        <AnimatedTextSwap
           className="profile-privacy-text-swap"
-          data-state={protectedNow ? "a" : "b"}
-        >
-          <span data-text="a">隐私保护中</span>
-          <span data-text="b">开启隐私保护</span>
-        </span>
+          reserveValues={["隐私保护中", "开启隐私保护"]}
+          value={protectedNow ? "隐私保护中" : "开启隐私保护"}
+        />
       </button>
-      <span className="profile-privacy-tooltip" id={tooltipId} role="tooltip">
-        选中时他人将<strong>无法获悉</strong>你的隐私数据
+      <span
+        aria-label={tooltipText}
+        className="profile-privacy-tooltip"
+        id={tooltipId}
+        role="tooltip"
+      >
+        <AnimatedTextSwap
+          reserveValues={[
+            "对外隐藏你的姓名和个人信息",
+            "你的个人信息将不再对外展示",
+          ]}
+          value={tooltipText}
+        />
       </span>
       {error ? (
         <span className="profile-privacy-error" role="alert">{error}</span>
@@ -437,7 +539,21 @@ export function ProfileView({
     year: "numeric",
     month: "long",
   }).format(new Date(profile.createdAt));
-  const profileDisplayName = profile.nickname ?? profile.realName;
+  const identityProtected = profile.isSelf
+    ? profileInfoSettings.visibility === "private"
+    : profile.identityProtected;
+  const relationshipContext = profile.isSelf
+    ? "我的个人空间"
+    : profile.isLimitedByCircle
+      ? "共同圈子成员"
+      : "朋友的个人空间";
+  const profilePrimaryName = identityProtected
+    ? profile.nickname ?? "一位朋友"
+    : profile.realName ?? profile.nickname ?? "一位朋友";
+  const profileContext = identityProtected
+    ? relationshipContext
+    : profile.nickname ?? relationshipContext;
+  const profileDisplayName = profile.nickname ?? profile.realName ?? "一位朋友";
 
   useEffect(() => {
     const identityRow = identityRowRef.current;
@@ -512,15 +628,21 @@ export function ProfileView({
             </div>
 
             <div className="profile-identity">
-              <p className="profile-context">
-                {profile.nickname ??
-                  (profile.isSelf
-                    ? "我的个人空间"
-                    : profile.isLimitedByCircle
-                      ? "共同圈子成员"
-                      : "朋友的个人空间")}
+              <p aria-label={profileContext} className="profile-context">
+                <AnimatedTextSwap
+                  reserveValues={[profile.nickname ?? relationshipContext, relationshipContext]}
+                  value={profileContext}
+                />
               </p>
-              <h1>{profile.realName}</h1>
+              <h1 aria-label={profilePrimaryName}>
+                <AnimatedTextSwap
+                  reserveValues={[
+                    profile.realName ?? "",
+                    profile.nickname ?? "一位朋友",
+                  ]}
+                  value={profilePrimaryName}
+                />
+              </h1>
             </div>
           </div>
 
@@ -533,7 +655,7 @@ export function ProfileView({
           <p className="profile-record-since">
             从 <time dateTime={profile.createdAt}>{recordStart}</time> 开始记录
           </p>
-          <ProfilePersonalInfo profile={profile} />
+          <ProfilePersonalInfo hidden={identityProtected} profile={profile} />
 
           {profile.isSelf ? (
             <div className="profile-hero-actions">
@@ -566,6 +688,7 @@ export function ProfileView({
                 草稿{currentUser.draftCount ? ` ${currentUser.draftCount}` : ""}
               </Link>
               <ProfilePrivacyToggle
+                nickname={profile.nickname}
                 onPendingChange={setPrivacyPending}
                 onPersisted={() => router.refresh()}
                 onSettingsChange={setProfileInfoSettings}

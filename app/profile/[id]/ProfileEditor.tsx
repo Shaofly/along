@@ -623,7 +623,7 @@ export function ProfileEditor({
     () => parseProfileResidence(profile.personalInfo?.residence),
     [profile.personalInfo?.residence],
   );
-  const [realName, setRealName] = useState(profile.realName);
+  const [realName, setRealName] = useState(profile.realName ?? "");
   const [nickname, setNickname] = useState(profile.nickname ?? "");
   const [bio, setBio] = useState(profile.bio);
   const [gender, setGender] = useState(
@@ -702,7 +702,7 @@ export function ProfileEditor({
   const hasCover = Boolean(coverFile || coverMediaId || coverSrc);
   const initialSignature = useMemo(
     () => JSON.stringify({
-      realName: profile.realName,
+      realName: profile.realName ?? "",
       nickname: profile.nickname ?? "",
       bio: profile.bio,
       gender: profile.personalInfo?.gender ?? "",

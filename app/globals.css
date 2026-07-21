@@ -47,6 +47,12 @@
   --icon-swap-start-scale: 0.25;
   --icon-swap-ease: ease-in-out;
 
+  /* Text states swap */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
+
   /* Modal open / close */
   --modal-open-dur: 250ms;
   --modal-close-dur: 150ms;
@@ -130,6 +136,33 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .t-icon-swap .t-icon { transition: none !important; }
+}
+
+.t-text-swap {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter    var(--text-swap-dur) var(--text-swap-ease),
+    opacity   var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap { transition: none !important; }
 }
 
 .app-page {
@@ -6900,6 +6933,37 @@ a {
   padding: 0;
 }
 
+.profile-personal-info-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--duration-fast) var(--ease-smooth-out);
+}
+
+.profile-personal-info-reveal[data-hidden="true"] {
+  grid-template-rows: 0fr;
+}
+
+.profile-personal-info-reveal-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.profile-personal-info-reveal .profile-personal-info {
+  filter: blur(0);
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    filter var(--duration-quick) var(--ease-in-out),
+    opacity var(--duration-quick) var(--ease-in-out),
+    transform var(--duration-quick) var(--ease-in-out);
+}
+
+.profile-personal-info-reveal[data-hidden="true"] .profile-personal-info {
+  filter: blur(var(--blur-small));
+  opacity: 0;
+  transform: translateY(calc(var(--distance-micro) * -1));
+}
+
 .profile-personal-info > div {
   align-items: center;
   display: inline-flex;
@@ -7064,6 +7128,7 @@ a {
 }
 
 .profile-privacy-icon-swap {
+  --icon-swap-dur: var(--duration-quick);
   flex: 0 0 auto;
 }
 
@@ -7073,31 +7138,18 @@ a {
   justify-content: center;
 }
 
-.profile-privacy-text-swap {
+.profile-text-swap-shell {
   display: inline-grid;
+  max-width: 100%;
 }
 
-.profile-privacy-text-swap > span {
-  filter: blur(var(--blur-small));
+.profile-text-swap-shell > * {
   grid-area: 1 / 1;
-  opacity: 0;
-  transform: translateY(var(--distance-micro));
-  transition:
-    opacity var(--duration-quick) var(--ease-in-out),
-    filter var(--duration-quick) var(--ease-in-out),
-    transform var(--duration-quick) var(--ease-in-out);
 }
 
-.profile-privacy-text-swap[data-state="a"] > [data-text="a"],
-.profile-privacy-text-swap[data-state="b"] > [data-text="b"] {
-  filter: blur(0);
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.profile-privacy-text-swap[data-state="a"] > [data-text="b"],
-.profile-privacy-text-swap[data-state="b"] > [data-text="a"] {
-  transform: translateY(calc(var(--distance-micro) * -1));
+.profile-text-swap-measure {
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .profile-privacy-tooltip {
@@ -7115,6 +7167,7 @@ a {
   padding: 8px 11px;
   pointer-events: none;
   position: absolute;
+  text-align: center;
   transform: translate(-50%, 3px) scale(0.98);
   transform-origin: 50% 100%;
   transition:
@@ -7606,14 +7659,6 @@ a {
   pointer-events: none;
   position: absolute;
   z-index: 1;
-}
-
-.profile-avatar-safe-area::after {
-  border: 1.5px solid rgba(255, 253, 246, 0.92);
-  border-radius: 50%;
-  content: "";
-  inset: 1px;
-  position: absolute;
 }
 
 .profile-media-avatar-fallback {
@@ -8691,7 +8736,8 @@ a {
   .profile-content-tabs a,
   .profile-editor-back,
   .profile-account-panel,
-  .profile-privacy-text-swap > span {
+  .profile-personal-info-reveal,
+  .profile-personal-info-reveal .profile-personal-info {
     transition: none !important;
   }
 }

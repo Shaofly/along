@@ -35,9 +35,13 @@ export function SummaryListItem({
 }
 
 export function FriendSummaryItem({ friend }: { friend: FriendSummary }) {
-  const title = friend.displayName === friend.realName
-    ? friend.realName
-    : `${friend.displayName}（${friend.realName}）`;
+  const title = friend.identityProtected
+    ? friend.remark && friend.nickname
+      ? `${friend.remark}（${friend.nickname}）`
+      : friend.displayName
+    : friend.displayName === friend.realName
+      ? friend.displayName
+      : `${friend.displayName}（${friend.realName}）`;
   return (
     <SummaryListItem
       className="summary-list-item--friend"

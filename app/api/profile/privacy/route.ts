@@ -31,7 +31,7 @@ export async function PATCH(request: Request) {
 
   const result = await db.transaction(async (transaction) => {
     const [owner] = await transaction
-      .select({ email: user.email })
+      .select({ email: user.email, nickname: user.nickname })
       .from(user)
       .where(eq(user.id, session.user.id))
       .limit(1)
@@ -47,6 +47,9 @@ export async function PATCH(request: Request) {
     const now = new Date();
 
     if (parsed.data.protected) {
+      if (!owner.nickname?.trim()) {
+        return { nicknameRequired: true as const };
+      }
       const lastSharedVisibility =
         details?.visibility === "all" || details?.visibility === "selected"
           ? details.visibility
@@ -126,6 +129,12 @@ export async function PATCH(request: Request) {
 
   if ("missing" in result) {
     return NextResponse.json({ error: "账号不存在。" }, { status: 404 });
+  }
+  if ("nicknameRequired" in result) {
+    return NextResponse.json(
+      { error: "请先在编辑资料中设置昵称，再开启隐私保护。" },
+      { status: 400 },
+    );
   }
   return NextResponse.json(result);
 }

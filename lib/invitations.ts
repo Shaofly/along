@@ -17,6 +17,7 @@ import {
   invitationSponsors,
   user,
   userProfileAppearance,
+  userProfileDetails,
 } from "@/db/schema";
 
 const invitationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -189,6 +190,7 @@ export async function getFriends(userId: string) {
       email: user.email,
       image: user.image,
       avatarMediaId: userProfileAppearance.avatarMediaId,
+      profileInfoVisibility: userProfileDetails.visibility,
       bio: user.bio,
       remark: friendRemarks.remark,
     })
@@ -196,6 +198,10 @@ export async function getFriends(userId: string) {
     .leftJoin(
       userProfileAppearance,
       eq(userProfileAppearance.userId, user.id),
+    )
+    .leftJoin(
+      userProfileDetails,
+      eq(userProfileDetails.userId, user.id),
     )
     .leftJoin(
       friendRemarks,
@@ -206,14 +212,28 @@ export async function getFriends(userId: string) {
     )
     .where(inArray(user.id, friendIds));
 
-  return rows.map((friend) => ({
-    ...friend,
-    image: friend.avatarMediaId
-      ? `/api/media/${friend.avatarMediaId}/thumbnail`
-      : friend.image,
-    identityName: friend.nickname
-      ? `${friend.nickname}（${friend.realName}）`
-      : friend.realName,
-    displayName: friend.remark ?? friend.nickname ?? friend.realName,
-  }));
+  return rows.map((friend) => {
+    const identityProtected = (friend.profileInfoVisibility ?? "private") === "private";
+    const safeIdentityName = identityProtected
+      ? friend.nickname ?? "一位朋友"
+      : friend.nickname
+        ? `${friend.nickname}（${friend.realName}）`
+        : friend.realName;
+    const displayName = friend.remark ?? friend.nickname ?? (identityProtected ? "一位朋友" : friend.realName);
+    return {
+      id: friend.id,
+      name: displayName,
+      email: friend.email,
+      realName: identityProtected ? null : friend.realName,
+      nickname: friend.nickname,
+      identityName: safeIdentityName,
+      displayName,
+      identityProtected,
+      remark: friend.remark,
+      image: friend.avatarMediaId
+        ? `/api/media/${friend.avatarMediaId}/thumbnail`
+        : friend.image,
+      bio: friend.bio,
+    };
+  });
 }

@@ -25,6 +25,13 @@ export function FriendsClient({
   const [remark, setRemark] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  function secondaryName(friend: FriendSummary) {
+    if (friend.identityProtected) {
+      return friend.remark ? friend.nickname : null;
+    }
+    if (friend.displayName !== friend.identityName) return friend.identityName;
+    return friend.nickname && friend.realName ? `真名：${friend.realName}` : null;
+  }
   const visibleFriends = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
     if (!normalized) return friends;
@@ -97,7 +104,7 @@ export function FriendsClient({
                   </span>
                   <span>
                     <strong>{friend.displayName}</strong>
-                    {friend.displayName !== friend.identityName ? <small>{friend.identityName}</small> : friend.nickname ? <small>真名：{friend.realName}</small> : null}
+                    {secondaryName(friend) ? <small>{secondaryName(friend)}</small> : null}
                   </span>
                 </Link>
                 <AnimatePresence initial={false} mode="wait">

@@ -177,6 +177,23 @@ export async function PATCH(request: Request) {
           currentAppearance?.coverMediaId,
         ].filter((value): value is string => Boolean(value)),
       );
+      const requestedViewerIds = personalInfo
+        ? [
+            ...new Set(
+              personalInfo.selectedFriendIds.filter(
+                (friendId) => friendId !== session.user.id,
+              ),
+            ),
+          ]
+        : [];
+      const resultingVisibility = personalInfo
+        ? personalInfo.visibility === "selected" && requestedViewerIds.length === 0
+          ? "private"
+          : personalInfo.visibility
+        : currentDetails?.visibility ?? "private";
+      if (resultingVisibility === "private" && !nickname) {
+        throw new Error("请先设置昵称，再开启或保留隐私保护。");
+      }
       const nextAvatarMediaId = avatar
         ? avatar.mediaId
         : currentAppearance?.avatarMediaId ?? null;
@@ -222,13 +239,7 @@ export async function PATCH(request: Request) {
         .where(eq(user.id, session.user.id));
 
       if (personalInfo) {
-        const selectedFriendIds = [
-          ...new Set(
-            personalInfo.selectedFriendIds.filter(
-              (friendId) => friendId !== session.user.id,
-            ),
-          ),
-        ];
+        const selectedFriendIds = requestedViewerIds;
         const friendshipRows = selectedFriendIds.length
           ? await transaction
               .select({

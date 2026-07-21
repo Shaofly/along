@@ -106,6 +106,7 @@ export default async function CircleMembersPage({ params }: { params: Promise<{ 
             nickname: friend.nickname,
             identityName: friend.identityName,
             displayName: friend.displayName,
+            identityProtected: friend.identityProtected,
             remark: friend.remark,
             image: friend.image,
             bio: friend.bio,

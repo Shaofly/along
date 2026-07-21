@@ -291,11 +291,13 @@ try {
         mediaId: profileAvatar.id,
         focusX: 4200,
         focusY: 3800,
+        scale: 10000,
       },
       cover: {
         mediaId: profileCover.id,
         focusX: 6100,
         focusY: 4700,
+        scale: 10000,
       },
     }),
   });
@@ -344,9 +346,28 @@ try {
     headers: { cookie: cookieC, "content-type": "application/json" },
     body: JSON.stringify({ protected: true }),
   });
-  await assertStatus(restoreFirstPrivacyProtection, 200);
+  await assertStatus(restoreFirstPrivacyProtection, 400);
+  assert(
+    (await restoreFirstPrivacyProtection.json()).error.includes("昵称"),
+  );
+  const addPrivacyNickname = await api("/api/profile", {
+    method: "PATCH",
+    headers: { cookie: cookieC, "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: users[2].realName,
+      nickname: "测试丙",
+      bio: "",
+    }),
+  });
+  await assertStatus(addPrivacyNickname, 200);
+  const protectAfterNickname = await api("/api/profile/privacy", {
+    method: "PATCH",
+    headers: { cookie: cookieC, "content-type": "application/json" },
+    body: JSON.stringify({ protected: true }),
+  });
+  await assertStatus(protectAfterNickname, 200);
   assert.equal(
-    (await restoreFirstPrivacyProtection.json()).visibility,
+    (await protectAfterNickname.json()).visibility,
     "private",
   );
   const profileInfoSecret = `profile-b-${suffix}@example.invalid`;
@@ -422,7 +443,17 @@ try {
     { headers: { cookie: cookieA } },
   );
   await assertStatus(protectedFriendProfile, 200);
-  assert(!(await protectedFriendProfile.text()).includes(profileInfoSecret));
+  const protectedFriendProfileHtml = await protectedFriendProfile.text();
+  assert(!protectedFriendProfileHtml.includes(profileInfoSecret));
+  assert(!protectedFriendProfileHtml.includes(users[1].realName));
+  assert(protectedFriendProfileHtml.includes("测试乙"));
+  const protectedFriendDirectory = await api("/friends", {
+    headers: { cookie: cookieA },
+  });
+  await assertStatus(protectedFriendDirectory, 200);
+  const protectedFriendDirectoryHtml = await protectedFriendDirectory.text();
+  assert(!protectedFriendDirectoryHtml.includes(users[1].realName));
+  assert(protectedFriendDirectoryHtml.includes("测试乙"));
   const keepExistingPrivateProfileScope = await api("/api/profile", {
     method: "PATCH",
     headers: { cookie: cookieB, "content-type": "application/json" },
@@ -561,11 +592,13 @@ try {
         mediaId: profileAvatar.id,
         focusX: 4200,
         focusY: 3800,
+        scale: 10000,
       },
       cover: {
         mediaId: null,
         focusX: 6100,
         focusY: 4700,
+        scale: 10000,
       },
     }),
   });
@@ -900,7 +933,7 @@ try {
     headers: { cookie: cookieA, "content-type": "application/json" },
     body: JSON.stringify({
       realName: users[0].realName,
-      nickname: "",
+      nickname: "测试甲",
       bio: "这是一条测试简介。",
     }),
   });
@@ -1731,11 +1764,13 @@ try {
         mediaId: profileAvatar.id,
         focusX: 4200,
         focusY: 3800,
+        scale: 10000,
       },
       cover: {
         mediaId: profileCircleCover.id,
         focusX: 5600,
         focusY: 4400,
+        scale: 10000,
       },
     }),
   });

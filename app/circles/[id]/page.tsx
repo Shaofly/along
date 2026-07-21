@@ -130,6 +130,7 @@ export default async function CirclePage({ params }: { params: Promise<{ id: str
                 nickname: friend.nickname,
                 identityName: friend.identityName,
                 displayName: friend.displayName,
+                identityProtected: friend.identityProtected,
                 remark: friend.remark,
                 image: friend.image,
                 bio: friend.bio,

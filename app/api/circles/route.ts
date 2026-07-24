@@ -9,6 +9,7 @@ import { getFriends } from "@/lib/invitations";
 const createCircleSchema = z.object({
   name: z.string().trim().min(1, "给圈子起一个名字。 ").max(40, "圈子名称不能超过 40 个字。"),
   description: z.string().trim().max(160, "圈子简介不能超过 160 个字。").default(""),
+  theme: z.enum(["peach", "sage", "mist", "lavender", "apricot", "teal"]).default("peach"),
   invitedUserIds: z.array(z.string()).min(1, "至少邀请一位朋友。 ").max(4, "初始最多邀请四位朋友。"),
 });
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
   const requestId = await createCircle(session.user.id, {
     name: parsed.data.name,
     description: parsed.data.description,
+    theme: parsed.data.theme,
     invitedUserIds,
   });
   return NextResponse.json({ ok: true, requestId });

@@ -36,14 +36,27 @@ import {
   posts,
   user,
   userProfileAppearance,
+  userProfileDetails,
 } from "@/db/schema";
 import { deleteMediaAsset } from "@/lib/media/service";
+import type { CircleTheme } from "@/lib/circle-theme";
 
 const activeProposalStatuses = ["pending_approval", "awaiting_candidate"] as const;
 const maximumCircleMembers = 10;
 const hourInMilliseconds = 60 * 60 * 1000;
 const dayInMilliseconds = 24 * hourInMilliseconds;
 const failedCreationResultRetention = 7 * dayInMilliseconds;
+
+function relationshipDisplayName(profile: {
+  name: string;
+  realName: string;
+  nickname: string | null;
+  profileInfoVisibility: "all" | "selected" | "private" | null;
+}) {
+  const identityProtected =
+    (profile.profileInfoVisibility ?? "private") === "private";
+  return profile.nickname ?? (identityProtected ? "一位朋友" : profile.realName || profile.name);
+}
 
 function threeDaysFromNow() {
   return new Date(Date.now() + 3 * dayInMilliseconds);
@@ -161,6 +174,7 @@ async function settleCircleCreationRequest(
     id: circleId,
     name: request.name,
     description: request.description,
+    theme: request.theme,
     status: "active",
     createdById: request.creatorId,
     createdAt: now,
@@ -369,6 +383,7 @@ export async function getCircleDashboard(userId: string) {
       circleId: circles.id,
       liveName: circles.name,
       liveDescription: circles.description,
+      liveTheme: circles.theme,
       liveStatus: circles.status,
       liveUpdatedAt: circles.updatedAt,
       frozenAt: circles.frozenAt,
@@ -423,6 +438,9 @@ export async function getCircleDashboard(userId: string) {
   const circleIds = [...new Set(relationRows.map((row) => row.circleId))];
   const activeRows = relationRows.filter((row) => row.activePeriodId !== null);
   const activeCircleIds = activeRows.map((row) => row.circleId);
+  const archivedSnapshotIds = relationRows.flatMap((row) =>
+    row.snapshotId ? [row.snapshotId] : [],
+  );
   const oldestViewedAt = activeRows.length
     ? new Date(
         Math.min(
@@ -462,6 +480,68 @@ export async function getCircleDashboard(userId: string) {
             ),
         ])
       : [[], []];
+
+  const [activeCoverRows, archivedCoverRows] = await Promise.all([
+    activeCircleIds.length
+      ? db
+          .selectDistinctOn([posts.circleId], {
+            circleId: posts.circleId,
+            mediaId: postMedia.mediaId,
+          })
+          .from(posts)
+          .innerJoin(postMedia, eq(postMedia.postId, posts.id))
+          .innerJoin(mediaAssets, eq(postMedia.mediaId, mediaAssets.id))
+          .where(
+            and(
+              inArray(posts.circleId, activeCircleIds),
+              eq(posts.publicationStatus, "published"),
+              eq(mediaAssets.status, "ready"),
+            ),
+          )
+          .orderBy(posts.circleId, desc(posts.createdAt), asc(postMedia.position))
+      : [],
+    archivedSnapshotIds.length
+      ? db
+          .selectDistinctOn([circleExitSnapshotPosts.exitSnapshotId], {
+            snapshotId: circleExitSnapshotPosts.exitSnapshotId,
+            mediaId: circleExitSnapshotMedia.mediaId,
+          })
+          .from(circleExitSnapshotPosts)
+          .innerJoin(
+            circleExitSnapshotMedia,
+            eq(
+              circleExitSnapshotMedia.snapshotPostId,
+              circleExitSnapshotPosts.id,
+            ),
+          )
+          .innerJoin(
+            mediaAssets,
+            eq(circleExitSnapshotMedia.mediaId, mediaAssets.id),
+          )
+          .where(
+            and(
+              inArray(
+                circleExitSnapshotPosts.exitSnapshotId,
+                archivedSnapshotIds,
+              ),
+              eq(mediaAssets.status, "ready"),
+            ),
+          )
+          .orderBy(
+            circleExitSnapshotPosts.exitSnapshotId,
+            desc(circleExitSnapshotPosts.createdAt),
+            asc(circleExitSnapshotMedia.position),
+          )
+      : [],
+  ]);
+  const activeCoverByCircle = new Map(
+    activeCoverRows.flatMap((row) =>
+      row.circleId ? [[row.circleId, row.mediaId] as const] : [],
+    ),
+  );
+  const archivedCoverBySnapshot = new Map(
+    archivedCoverRows.map((row) => [row.snapshotId, row.mediaId] as const),
+  );
 
   const memberPeriodRows = circleIds.length
     ? await db
@@ -546,6 +626,15 @@ export async function getCircleDashboard(userId: string) {
       description: isActive
         ? row.liveDescription
         : (row.snapshotDescription ?? row.liveDescription),
+      theme: row.liveTheme,
+      coverImage: (() => {
+        const mediaId = isActive
+          ? activeCoverByCircle.get(row.circleId)
+          : row.snapshotId
+            ? archivedCoverBySnapshot.get(row.snapshotId)
+            : null;
+        return mediaId ? `/api/media/${mediaId}/thumbnail` : null;
+      })(),
       status: row.liveStatus,
       updatedAt: (
         isActive
@@ -577,6 +666,7 @@ export async function getCircleDashboard(userId: string) {
       id: circleCreationRequests.id,
       name: circleCreationRequests.name,
       description: circleCreationRequests.description,
+      theme: circleCreationRequests.theme,
       status: circleCreationRequests.status,
       expiresAt: circleCreationRequests.expiresAt,
       resolvedAt: circleCreationRequests.resolvedAt,
@@ -596,10 +686,14 @@ export async function getCircleDashboard(userId: string) {
           requestId: circleCreationInvitees.requestId,
           candidateId: user.id,
           candidateName: user.name,
+          candidateRealName: user.realName,
+          candidateNickname: user.nickname,
+          profileInfoVisibility: userProfileDetails.visibility,
           status: circleCreationInvitees.status,
         })
         .from(circleCreationInvitees)
         .innerJoin(user, eq(circleCreationInvitees.candidateId, user.id))
+        .leftJoin(userProfileDetails, eq(userProfileDetails.userId, user.id))
         .where(inArray(circleCreationInvitees.requestId, creationRequestIds))
         .orderBy(user.name)
     : [];
@@ -612,7 +706,12 @@ export async function getCircleDashboard(userId: string) {
       .filter((invitee) => invitee.requestId === request.id)
       .map((invitee) => ({
         id: invitee.candidateId,
-        name: invitee.candidateName,
+        name: relationshipDisplayName({
+          name: invitee.candidateName,
+          realName: invitee.candidateRealName,
+          nickname: invitee.candidateNickname,
+          profileInfoVisibility: invitee.profileInfoVisibility,
+        }),
         status: invitee.status,
       })),
   }));
@@ -621,13 +720,26 @@ export async function getCircleDashboard(userId: string) {
     .select({
       requestId: circleCreationRequests.id,
       circleName: circleCreationRequests.name,
+      theme: circleCreationRequests.theme,
       expiresAt: circleCreationRequests.expiresAt,
+      inviterName: user.name,
+      inviterRealName: user.realName,
+      inviterNickname: user.nickname,
+      profileInfoVisibility: userProfileDetails.visibility,
+      inviterImage: user.image,
+      inviterAvatarMediaId: userProfileAppearance.avatarMediaId,
     })
     .from(circleCreationInvitees)
     .innerJoin(
       circleCreationRequests,
       eq(circleCreationInvitees.requestId, circleCreationRequests.id),
     )
+    .innerJoin(user, eq(circleCreationRequests.creatorId, user.id))
+    .leftJoin(
+      userProfileAppearance,
+      eq(userProfileAppearance.userId, user.id),
+    )
+    .leftJoin(userProfileDetails, eq(userProfileDetails.userId, user.id))
     .where(
       and(
         eq(circleCreationInvitees.candidateId, userId),
@@ -640,6 +752,7 @@ export async function getCircleDashboard(userId: string) {
       proposalId: circleJoinProposals.id,
       circleId: circles.id,
       circleName: circles.name,
+      theme: circles.theme,
       candidateId: circleJoinProposals.candidateId,
       kind: circleJoinProposals.kind,
       allowHistory: circleJoinProposals.allowHistory,
@@ -659,6 +772,7 @@ export async function getCircleDashboard(userId: string) {
       proposalId: circleJoinProposals.id,
       circleId: circles.id,
       circleName: circles.name,
+      theme: circles.theme,
       candidateId: circleJoinProposals.candidateId,
       kind: circleJoinProposals.kind,
       allowHistory: circleJoinProposals.allowHistory,
@@ -689,12 +803,33 @@ export async function getCircleDashboard(userId: string) {
   const candidateIds = [...new Set(approvalRows.map((row) => row.candidateId))];
   const candidates = candidateIds.length
     ? await db
-        .select({ id: user.id, name: user.name })
+        .select({
+          id: user.id,
+          name: user.name,
+          realName: user.realName,
+          nickname: user.nickname,
+          profileInfoVisibility: userProfileDetails.visibility,
+          image: user.image,
+          avatarMediaId: userProfileAppearance.avatarMediaId,
+        })
         .from(user)
+        .leftJoin(
+          userProfileAppearance,
+          eq(userProfileAppearance.userId, user.id),
+        )
+        .leftJoin(userProfileDetails, eq(userProfileDetails.userId, user.id))
         .where(inArray(user.id, candidateIds))
     : [];
-  const candidateNames = new Map(
-    candidates.map((candidate) => [candidate.id, candidate.name]),
+  const candidateProfiles = new Map(
+    candidates.map((candidate) => [
+      candidate.id,
+      {
+        name: relationshipDisplayName(candidate),
+        image: candidate.avatarMediaId
+          ? `/api/media/${candidate.avatarMediaId}/thumbnail`
+          : candidate.image,
+      },
+    ]),
   );
 
   return {
@@ -705,7 +840,17 @@ export async function getCircleDashboard(userId: string) {
         actionId: row.requestId,
         actionType: "creation" as const,
         circleName: row.circleName,
+        theme: row.theme,
         candidateName: "你",
+        displayName: relationshipDisplayName({
+          name: row.inviterName,
+          realName: row.inviterRealName,
+          nickname: row.inviterNickname,
+          profileInfoVisibility: row.profileInfoVisibility,
+        }),
+        image: row.inviterAvatarMediaId
+          ? `/api/media/${row.inviterAvatarMediaId}/thumbnail`
+          : row.inviterImage,
         kind: "creation" as const,
         allowHistory: true,
         expiresAt: row.expiresAt.toISOString(),
@@ -716,9 +861,12 @@ export async function getCircleDashboard(userId: string) {
         actionType: "proposal" as const,
         circleId: row.circleId,
         circleName: row.circleName,
+        theme: row.theme,
         kind: row.kind,
         allowHistory: row.allowHistory,
         candidateName: "你",
+        displayName: row.circleName,
+        image: null,
         expiresAt: row.expiresAt.toISOString(),
         role: "candidate" as const,
       })),
@@ -727,9 +875,14 @@ export async function getCircleDashboard(userId: string) {
         actionType: "proposal" as const,
         circleId: row.circleId,
         circleName: row.circleName,
+        theme: row.theme,
         kind: row.kind,
         allowHistory: row.allowHistory,
-        candidateName: candidateNames.get(row.candidateId) ?? "一位朋友",
+        candidateName:
+          candidateProfiles.get(row.candidateId)?.name ?? "一位朋友",
+        displayName:
+          candidateProfiles.get(row.candidateId)?.name ?? "一位朋友",
+        image: candidateProfiles.get(row.candidateId)?.image ?? null,
         expiresAt: row.expiresAt.toISOString(),
         role: "approver" as const,
       })),
@@ -746,6 +899,7 @@ export async function getCircleDetail(userId: string, circleId: string) {
       activePeriodId: circleMemberRelations.activePeriodId,
       liveName: circles.name,
       liveDescription: circles.description,
+      liveTheme: circles.theme,
       liveStatus: circles.status,
       liveCreatedAt: circles.createdAt,
       liveUpdatedAt: circles.updatedAt,
@@ -885,6 +1039,7 @@ export async function getCircleDetail(userId: string, circleId: string) {
     description: isArchived
       ? (viewer.snapshotDescription ?? viewer.liveDescription)
       : viewer.liveDescription,
+    theme: viewer.liveTheme,
     status: viewer.liveStatus,
     createdAt: viewer.liveCreatedAt.toISOString(),
     updatedAt: (
@@ -912,7 +1067,12 @@ export async function getCircleDetail(userId: string, circleId: string) {
 
 export async function createCircle(
   creatorId: string,
-  input: { name: string; description: string; invitedUserIds: string[] },
+  input: {
+    name: string;
+    description: string;
+    theme: CircleTheme;
+    invitedUserIds: string[];
+  },
 ) {
   const now = new Date();
   const requestId = randomUUID();
@@ -922,6 +1082,7 @@ export async function createCircle(
       creatorId,
       name: input.name,
       description: input.description,
+      theme: input.theme,
       expiresAt: oneDayFrom(now),
       createdAt: now,
     });

@@ -8,6 +8,7 @@ import {
   ComposerPhotoBoard,
   type ComposerPhoto,
 } from "@/app/components/ComposerPhotoBoard";
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
 import { DissolveTextarea } from "@/app/components/DissolveField";
 import { ModalSurface } from "@/app/components/ModalSurface";
 import { AnimatedReveal, SegmentedControl } from "@/app/components/SegmentedControl";
@@ -298,7 +299,8 @@ export function PostEditor({
               <legend>指定朋友</legend>
               {friends.map((friend) => (
                 <label key={friend.id}>
-                  <input
+                  <AnimatedCheckbox
+                    aria-label={friend.name}
                     checked={viewerIds.includes(friend.id)}
                     onChange={(event) =>
                       setViewerIds((current) =>
@@ -307,7 +309,6 @@ export function PostEditor({
                           : current.filter((id) => id !== friend.id),
                       )
                     }
-                    type="checkbox"
                   />
                   {friend.name}
                 </label>
@@ -343,7 +344,8 @@ export function PostEditor({
                   className={!participant.isActive ? "is-unavailable" : ""}
                   key={participant.id}
                 >
-                  <input
+                  <AnimatedCheckbox
+                    aria-label={participant.name}
                     checked={
                       isCreator || participantIds.includes(participant.id)
                     }
@@ -355,7 +357,6 @@ export function PostEditor({
                           : current.filter((id) => id !== participant.id),
                       )
                     }
-                    type="checkbox"
                   />
                   {participant.name}
                   {participant.realName !== participant.name

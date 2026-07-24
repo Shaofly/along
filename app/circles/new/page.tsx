@@ -1,40 +1,39 @@
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { CircleCreateForm } from "@/app/circles/CircleCreateForm";
 import { AppShell } from "@/app/components/AppShell";
 import { auth } from "@/lib/auth";
-import { getCircleDashboard } from "@/lib/circles";
 import { getFriends } from "@/lib/invitations";
 import { getShellUser } from "@/lib/users";
 
-import { CirclesClient } from "./CirclesClient";
-
 export const dynamic = "force-dynamic";
 
-export default async function CirclesPage() {
+export default async function CircleCreatePage() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/");
-  const [currentUser, dashboard, friends] = await Promise.all([
+  const [currentUser, friends] = await Promise.all([
     getShellUser(session.user.id),
-    getCircleDashboard(session.user.id),
     getFriends(session.user.id),
   ]);
   if (!currentUser) redirect("/");
 
   return (
     <AppShell
-      mobileHeader={{
-        action: { href: "/circles/new", label: "建立圈子" },
-        title: "圈子",
-      }}
-      pageClassName="circle-page"
+      mobileHeader={{ mode: "detail", title: "建立圈子" }}
+      pageClassName="circle-create-page"
       user={currentUser}
     >
-      <div className="circle-page-inner">
-        <CirclesClient
-          actions={dashboard.actions}
-          circles={dashboard.circles}
-          creationRequests={dashboard.creationRequests}
+      <div className="circle-create-page-inner">
+        <header>
+          <Link aria-label="返回圈子" href="/circles">
+            <ArrowLeft aria-hidden="true" size={21} strokeWidth={1.8} />
+          </Link>
+          <h1>建立圈子</h1>
+        </header>
+        <CircleCreateForm
           friends={friends.map((friend) => ({
             id: friend.id,
             name: friend.name,
@@ -47,6 +46,7 @@ export default async function CirclesPage() {
             image: friend.image,
             bio: friend.bio,
           }))}
+          presentation="page"
         />
       </div>
     </AppShell>

@@ -5,6 +5,7 @@ import { ArrowLeft, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { DissolveTextarea } from "@/app/components/DissolveField";
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
 import {
   ComposerPhotoBoard,
   createComposerPhoto,
@@ -748,7 +749,8 @@ export function FullComposer({
               <legend>选择能看到这条动态的朋友</legend>
               {friends.map((friend) => (
                 <label key={friend.id}>
-                  <input
+                  <AnimatedCheckbox
+                    aria-label={friend.name}
                     checked={viewerIds.includes(friend.id)}
                     onChange={(event) =>
                       setViewerIds((current) =>
@@ -757,7 +759,6 @@ export function FullComposer({
                           : current.filter((id) => id !== friend.id),
                       )
                     }
-                    type="checkbox"
                   />
                   {friend.name}
                 </label>
@@ -786,7 +787,8 @@ export function FullComposer({
                   className={!participant.isActive ? "is-unavailable" : ""}
                   key={participant.id}
                 >
-                  <input
+                  <AnimatedCheckbox
+                    aria-label={participant.name}
                     checked={
                       isAuthor || participantIds.includes(participant.id)
                     }
@@ -798,7 +800,6 @@ export function FullComposer({
                           : current.filter((id) => id !== participant.id),
                       )
                     }
-                    type="checkbox"
                   />
                   {participant.name}
                   {participant.realName !== participant.name

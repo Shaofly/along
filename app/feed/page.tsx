@@ -38,7 +38,7 @@ export default async function FeedPage() {
         <div className="section-line-heading">
           <div>
             <p className="eyebrow">全部动态</p>
-            <h1>最近留下的片段</h1>
+            <h1>最近的记录</h1>
           </div>
           <span>{posts.length} 条可见</span>
         </div>

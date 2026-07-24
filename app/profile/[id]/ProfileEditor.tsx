@@ -23,6 +23,7 @@ import {
 import { useRouter } from "next/navigation";
 
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
 import { DissolveTextarea } from "@/app/components/DissolveField";
 import { ModalSurface } from "@/app/components/ModalSurface";
 import {
@@ -1226,7 +1227,8 @@ export function ProfileEditor({
                       const selected = selectedFriendIds.includes(friend.id);
                       return (
                         <label key={friend.id}>
-                          <input
+                          <AnimatedCheckbox
+                            aria-label={friend.displayName}
                             checked={selected}
                             onChange={(event) => {
                               setSelectedFriendIds((current) =>
@@ -1237,7 +1239,6 @@ export function ProfileEditor({
                                     ),
                               );
                             }}
-                            type="checkbox"
                           />
                           <span className="profile-selected-friend-avatar">
                             <UserAvatar

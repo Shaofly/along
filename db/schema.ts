@@ -80,6 +80,15 @@ export const circleStatus = pgEnum("circle_status", [
   "dissolved",
 ]);
 
+export const circleTheme = pgEnum("circle_theme", [
+  "peach",
+  "sage",
+  "mist",
+  "lavender",
+  "apricot",
+  "teal",
+]);
+
 export const circleProposalKind = pgEnum("circle_proposal_kind", [
   "add",
   "rejoin",
@@ -369,6 +378,7 @@ export const circles = pgTable(
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     description: text("description").default("").notNull(),
+    theme: circleTheme("theme").default("peach").notNull(),
     status: circleStatus("status").default("active").notNull(),
     createdById: text("created_by_id")
       .notNull()
@@ -423,6 +433,7 @@ export const circleCreationRequests = pgTable(
       .references(() => user.id),
     name: text("name").notNull(),
     description: text("description").default("").notNull(),
+    theme: circleTheme("theme").default("peach").notNull(),
     status: circleCreationStatus("status").default("pending").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     formedCircleId: text("formed_circle_id").references(() => circles.id, {

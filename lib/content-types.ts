@@ -1,4 +1,5 @@
 import type { PhotoLayoutSpec } from "@/lib/photo-layout";
+import type { CircleTheme } from "@/lib/circle-theme";
 
 export type PostVisibility = "friends" | "selected" | "private";
 export type ProfileTheme = "sage" | "rose" | "mist" | "apricot" | "ink";
@@ -92,6 +93,9 @@ export type CircleSummary = {
   id: string;
   name: string;
   description: string;
+  theme: CircleTheme;
+  coverImage: string | null;
+  updatedAt: string;
   status: "active" | "frozen" | "dissolved";
   isActive: boolean;
   isArchived?: boolean;

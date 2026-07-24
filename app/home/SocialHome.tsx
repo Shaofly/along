@@ -17,6 +17,7 @@ import {
 import { useRouter } from "next/navigation";
 
 import { AppShell, type ShellUser } from "@/app/components/AppShell";
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
 import { DissolveTextarea } from "@/app/components/DissolveField";
 import { ModalSurface } from "@/app/components/ModalSurface";
 import {
@@ -566,17 +567,17 @@ export function SocialHome({
               </AnimatedReveal>
               <AnimatedReveal show={publishSpace === "personal" && visibility === "selected"}>
                 <fieldset className="friend-picker">
-                  <legend>选择能看到这条动态的朋友</legend>
+                  <legend>指定能看到这条动态的朋友</legend>
                   {friends.map((friend) => (
                     <label key={friend.id}>
-                      <input
+                      <AnimatedCheckbox
+                        aria-label={friend.name}
                         checked={viewerIds.includes(friend.id)}
                         onChange={(event) => setViewerIds((current) =>
                           event.target.checked
                             ? [...current, friend.id]
                             : current.filter((id) => id !== friend.id),
                         )}
-                        type="checkbox"
                       />
                       {friend.name}
                     </label>
@@ -664,7 +665,7 @@ export function SocialHome({
       >
         <div className="draft-dialog">
           <h2 id="draft-dialog-title">要保存这条未完成的记录吗？</h2>
-          <p>保存后可以在其他设备上继续写，只有你自己能看到。</p>
+          <p>保存后可以在其他设备上继续编辑，可在草稿箱中查看。</p>
           <div className="draft-dialog-actions">
             <button data-modal-initial-focus className="draft-save-action" disabled={pending} onClick={saveAndCloseDraft} type="button">
               <TextStateSwap

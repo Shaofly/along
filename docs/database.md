@@ -7,7 +7,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 | 数据能力 | 状态 | 当前实现证据 | 说明 |
 | --- | --- | --- | --- |
 | 认证、邀请、朋友关系与个人内容 | `已实现` | `db/schema.ts`、认证与邀请领域服务 | 已进入当前可用流程 |
-| 建圈批次与 24 小时统一结算 | `已实现` | `circle_creation_requests`、`circle_creation_invitees` | 结算前不存在正式圈子 |
+| 建圈批次、主题色与 24 小时统一结算 | `已实现` | `circle_creation_requests.theme`、`circles.theme`、`circle_creation_invitees` | 结算前不存在正式圈子 |
 | 持久圈子成员关系与多次成员周期 | `已实现` | `circle_member_relations`、`circle_membership_periods`、`lib/circles.ts` | 活跃状态通过当前周期指针加速查询 |
 | 圈子冻结、恢复与到期硬删除 | `已实现` | `circles.frozen_at`、`delete_at`、`recoverable_by_user_id` | 依赖内部维护任务按时执行 |
 | 退出冻结档案 | `已实现` | `circle_exit_snapshots`、`circle_exit_snapshot_posts`、`circle_exit_snapshot_media` | 每个用户与圈子最多保留一份当前退出档案 |
@@ -68,6 +68,7 @@ PostgreSQL 是圆个圈关系、权限和内容元数据的唯一事实来源。
 - 圈子名称不能为空，名称和简介长度受限，解散状态必须带解散时间。
 - 建圈请求有效期晚于创建时间，待处理、已建立和失败三种状态分别约束解决时间、正式圈子引用和结果清理时间；受邀者未处理状态不能带解决时间。
 - 正式圈子不使用`forming（建立中）`状态。建圈请求全部终结且至少一人接受后，才在一个事务中创建`active（活跃）`圈子和首批成员。
+- `circle_theme`限定为`peach`、`sage`、`mist`、`lavender`、`apricot`和`teal`。建圈请求与正式圈子都必须保存主题，默认`peach`；统一结算必须把请求主题原样写入新圈子，避免正式建立时回退为另一种视觉。
 - `frozen（冻结）`圈子必须同时带冻结时间、未来删除时间和可恢复人；非冻结圈子不得残留这些字段。
 - 成员退出时间不能早于加入时间，同一持久关系最多只有一个开放成员周期。
 - 同一用户与同一圈子只有一条持久成员关系。

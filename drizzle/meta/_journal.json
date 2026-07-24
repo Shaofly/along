@@ -141,6 +141,13 @@
       "when": 1784570544834,
       "tag": "0019_sticky_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784665623118,
+      "tag": "0020_colossal_johnny_storm",
+      "breakpoints": true
     }
   ]
 }

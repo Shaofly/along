@@ -3,6 +3,8 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
+
 type Friend = { id: string; name: string; email: string };
 type PendingInvitation = {
   id: string;
@@ -101,7 +103,11 @@ export function InviteManager({
             <div className="sponsor-list">
               {friends.map((friend) => (
                 <label className="sponsor-option" key={friend.id}>
-                  <input type="checkbox" name="sponsorIds" value={friend.id} />
+                  <AnimatedCheckbox
+                    aria-label={`选择 ${friend.name} 作为共同邀请人`}
+                    name="sponsorIds"
+                    value={friend.id}
+                  />
                   <span>
                     <strong>{friend.name}</strong>
                     <small>{friend.email}</small>

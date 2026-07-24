@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
+import { AnimatedCheckbox } from "@/app/components/AnimatedCheckbox";
 import { AnimatedReveal } from "@/app/components/SegmentedControl";
 import { TextStateSwap } from "@/app/components/TextStateSwap";
 import type { FriendSummary } from "@/lib/content-types";
@@ -167,7 +168,11 @@ export function CircleMemberActions({
                 </select>
               </label>
               <label className="history-permission-choice">
-                <input defaultChecked name="allowHistory" type="checkbox" />
+                <AnimatedCheckbox
+                  aria-label="允许查看加入前的圈子记录"
+                  defaultChecked
+                  name="allowHistory"
+                />
                 <span><strong>允许查看加入前的圈子记录</strong><small>其他成员审批时会同时看到这个选择。</small></span>
               </label>
                 <button className="publish-button" disabled={pending || inviteableFriends.length === 0} type="submit">发起全员确认</button>

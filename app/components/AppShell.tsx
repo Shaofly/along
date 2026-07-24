@@ -1,7 +1,7 @@
 "use client";
 
 import { animate, AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
-import { ArrowLeft, Bell, ChevronDown, FilePenLine, LogOut, Menu, Settings, UserRound, UsersRound, X } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, FilePenLine, LogOut, Menu, Plus, Settings, UserRound, UsersRound, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -30,6 +30,10 @@ type PrimaryRoute = "home" | "circles" | "friends" | "profile";
 type DrawerGestureMode = "pending" | "horizontal";
 
 export type MobileHeaderContext = {
+  action?: {
+    href: string;
+    label: string;
+  };
   compactProfile?: boolean;
   mode?: "primary" | "detail";
   profileIdentity?: {
@@ -419,7 +423,7 @@ export function AppShell({
 
   return (
     <div
-      className={`app-shell${drawerOpen ? " drawer-open" : ""}${isSecondaryRoute ? " secondary-route" : ""}${isMobileDetailRoute ? " mobile-detail-route" : ""}${isProfileHeaderRoute ? " profile-header-route" : ""}${mobileHeader?.compactProfile ? " mobile-profile-header-compact" : ""}${secondaryExiting ? " secondary-exiting" : ""}${isTaskRoute ? " task-route" : ""}${taskExiting ? " task-exiting" : ""}`}
+      className={`app-shell${drawerOpen ? " drawer-open" : ""}${isSecondaryRoute ? " secondary-route" : ""}${isMobileDetailRoute ? " mobile-detail-route" : ""}${isProfileHeaderRoute ? " profile-header-route" : ""}${mobileHeader?.action ? " mobile-header-action" : ""}${mobileHeader?.compactProfile ? " mobile-profile-header-compact" : ""}${secondaryExiting ? " secondary-exiting" : ""}${isTaskRoute ? " task-route" : ""}${taskExiting ? " task-exiting" : ""}`}
       onClickCapture={handleShellClickCapture}
       onPointerCancel={cancelDrawerGesture}
       onPointerDown={beginDrawerGesture}
@@ -544,6 +548,15 @@ export function AppShell({
           </div>
 
           <div className="header-utility-actions">
+            {mobileHeader?.action ? (
+              <Link
+                aria-label={mobileHeader.action.label}
+                className="header-mobile-action"
+                href={mobileHeader.action.href}
+              >
+                <Plus aria-hidden="true" size={25} strokeWidth={1.8} />
+              </Link>
+            ) : null}
             <Link
               aria-current={pathname.startsWith("/drafts") ? "page" : undefined}
               className={`header-utility-button drafts-button${pathname.startsWith("/drafts") ? " active" : ""}`}
